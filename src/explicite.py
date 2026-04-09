@@ -1,78 +1,20 @@
 # src/explicite.py
 
-import numpy as np
-from numba import njit
+from src.numerics import _apply_boundary, _laplacian_all, _safe_denominator, update_F
 
 
-# OPERATEUR SPATIAL
-@njit
-def _laplacian(u, i, dx2):
-    """Laplacien 1D centré."""
-    return (u[i+1] - 2*u[i] + u[i-1]) / dx2
-
-
-# CALCUL u_tt
-@njit
-def _compute_utt(u_i, u_prev_i, lap, lap_prev, c, a, beta, dt, nonlinear):
+def step_explicit(u, u_prev, F, c, b, k, dt, dx, bc_type):
     """
-    Calcule u_tt selon l'équation de Westervelt
+    Schéma explicite:
+      F^{n+1} = F^n + dt(c^2 Δu^n + 2k(D_t^-u^n)^2)
+      u^{n+1} = u^n + dt(F^{n+1} + bΔu^n)/(1 - 2k u^n)
     """
-
-    c2 = c**2
-
-    # terme diffusion
-    lap_ut = (lap - lap_prev) / dt
-
-    utt = c2 * lap + a * lap_ut
-
-    if nonlinear:
-        denom = 1.0 - beta * u_i
-        utt = utt / denom
-
-    return utt
-
-
-# CONDITIONS DE BORD
-@njit
-def _apply_boundary(u, bc_type):
-
-    if bc_type == 0:  # Dirichlet
-        u[0] = 0.0
-        u[-1] = 0.0
-
-    elif bc_type == 1:  # Neumann
-        u[0] = u[1]
-        u[-1] = u[-2]
-
-
-# PAS DE TEMPS EXPLICITE
-@njit
-def step_explicit(u, u_prev, c, a, beta, dt, dx, nonlinear, bc_type):
-    """
-    Effectue un pas de temps explicite pour l'équation de Westervelt
-    """
-
-    nx = u.shape[0]
-
-    u_next = np.zeros_like(u)
+    F_next = update_F(F, u, u_prev, dt, dx, c, k, bc_type)
 
     dx2 = dx * dx
-    dt2 = dt * dt
-
-    for i in range(1, nx-1):
-
-        lap = _laplacian(u, i, dx2)
-        lap_prev = _laplacian(u_prev, i, dx2)
-
-        utt = _compute_utt(
-            u[i], u_prev[i],
-            lap, lap_prev,
-            c, a, beta, dt,
-            nonlinear
-        )
-
-        u_next[i] = 2*u[i] - u_prev[i] + dt2 * utt
+    lap_u = _laplacian_all(u, dx2)
+    denom = _safe_denominator(1.0 - 2.0 * k * u)
+    u_next = u + dt * (F_next + b * lap_u) / denom
 
     _apply_boundary(u_next, bc_type)
-
-    return u_next
+    return u_next, F_next

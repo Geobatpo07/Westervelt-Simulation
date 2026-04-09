@@ -1,34 +1,11 @@
 # src/splitting.py
 
 import numpy as np
-from numba import njit
-
-
-# OPERATEUR SPATIAL
-
-@njit
-def _laplacian(u, i, dx2):
-    """Laplacien 1D centré."""
-    return (u[i+1] - 2*u[i] + u[i-1]) / dx2
-
-
-# CONDITIONS DE BORD
-
-@njit
-def _apply_boundary(u, bc_type):
-
-    if bc_type == 0:  # Dirichlet
-        u[0] = 0.0
-        u[-1] = 0.0
-
-    elif bc_type == 1:  # Neumann
-        u[0] = u[1]
-        u[-1] = u[-2]
+from src.numerics import _laplacian, _apply_boundary
 
 
 # OPERATEUR ONDE
 
-@njit
 def step_wave(u, u_prev, c, dt, dx, bc_type):
 
     nx = u.shape[0]
@@ -52,7 +29,6 @@ def step_wave(u, u_prev, c, dt, dx, bc_type):
 
 # OPERATEUR DISSIPATION
 
-@njit
 def step_diffusion(u, u_prev, a, dt, dx, bc_type):
 
     nx = u.shape[0]
@@ -78,7 +54,6 @@ def step_diffusion(u, u_prev, a, dt, dx, bc_type):
 
 # OPERATEUR NON LINEAIRE
 
-@njit
 def step_nonlinear(u, u_prev, beta, dt, bc_type):
 
     nx = u.shape[0]
