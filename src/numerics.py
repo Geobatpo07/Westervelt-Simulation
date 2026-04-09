@@ -30,16 +30,7 @@ def _safe_denominator(denom, eps=1e-12):
     return safe
 
 
-def _apply_boundary(
-    u,
-    bc_type,
-    dx=None,
-    alpha_left=None,
-    beta_left=None,
-    alpha_right=None,
-    beta_right=None,
-    frac_order=None,
-):
+def _apply_boundary(u, bc_type):
     """
     Applique les conditions aux limites.
 
@@ -63,7 +54,7 @@ def update_F(F_n, u_n, u_prev, dt, dx, c, k, bc_type):
     c2 = c * c
     lap_u = _laplacian_all(u_n, dx2)
     ut = _time_derivative(u_n, u_prev, dt)
-    F_next = F_n + dt * (c2 * lap_u + 2.0 * k * ut * ut)
+    F_next = F_n + dt * (c2 * lap_u + 2.0 * k * ut ** 2)
     _apply_boundary(F_next, bc_type)
     return F_next
 
@@ -73,7 +64,7 @@ def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
     nx = u_n.shape[0]
     denom = _safe_denominator(1.0 - 2.0 * k * u_n)
     rhs_full = u_n + dt * F_next / denom
-    lam_full = dt * b / (denom * dx * dx)
+    lam_full = dt * b / (denom * dx ** 2)
 
     n_int = nx - 2
     if n_int <= 0:
@@ -88,13 +79,13 @@ def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
         i = j + 1
         lam = lam_full[i]
 
-        if bc_type == 0:
+        if bc_type == 0: # Dirichlet
             diag[j] = 1.0 + 2.0 * lam
             if j > 0:
                 lower[j - 1] = -lam
             if j < n_int - 1:
                 upper[j] = -lam
-        elif bc_type == 1:
+        elif bc_type == 1: # Neumann
             if j == 0 or j == n_int - 1:
                 diag[j] = 1.0 + lam
             else:
