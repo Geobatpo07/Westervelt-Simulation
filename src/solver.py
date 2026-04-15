@@ -78,24 +78,50 @@ class WesterveltSolver:
         """Nombre lambda = c^2 dt / dx^2."""
         return float((self.param.c ** 2) * self.param.dt / (self.param.dx ** 2))
 
-    def _is_lambda_stable(self):
-        """Critère de stabilité théorique basé sur lambda."""
-        lam = self._lambda_number()
-        if self.param.scheme == "explicit":
-            return lam <= 0.5
-        return True
+    def explicit_stability_margin(self):
+        """Indication de marge de stabilité théorique pour le schéma explicite."""
+        return self.param.dx ** 2 - (self.param.c ** 2 * self.param.dt ** 2 + 2 * self.param.b * self.param.dt)
+
+    def explicit_theoretical_stable(self):
+        """Indication de stabilité théorique pour le schéma explicite."""
+        return self.explicit_stability_margin() >= 0.0
+
+    def semi_implicit_stability_margin(self, alpha=1.0):
+        """Indication de marge de stabilité théorique pour le schéma semi-implicite."""
+        return alpha * self.param.dx ** 2 - (self.param.c ** 2 * self.param.dt ** 2 - 2 * self.param.b * self.param.dt)
+
+    def semi_implicit_theoretical_stable(self, alpha=1.0):
+        """Indication de stabilité théorique pour le schéma semi-implicite."""
+        return self.semi_implicit_stability_margin(alpha=alpha) >= 0.0
 
     def check_stability_indicators(self):
-        """Affiche les indicateurs de stabilité (lambda décisionnel, CFL informatif)."""
+        """Affiche les indicateurs de stabilité (CFL, lambda) et les marges de stabilité pour le schéma choisi."""
         cfl = self.param.c * self.param.dt / self.param.dx
-        lam = self._lambda_number()
-        print(f"Indicateurs: lambda={lam:.6g}, cfl={cfl:.6g}")
-        if self.param.scheme == "explicit" and lam > 0.5:
-            print("Attention: lambda > 0.5 en explicite (risque d'instabilité théorique).")
+        lam_legacy = self._lambda_number()
 
-    def check_cfl(self):
-        """Compatibilité: ancien nom, redirige vers check_stability_indicators."""
-        self.check_stability_indicators()
+        print(f"Indicateurs: CFL={cfl:.6g}, lambda={lam_legacy:.6g} (legacy)")
+
+        if self.param.scheme == "explicit":
+            margin = self.explicit_stability_margin()
+            print(f"Marge de stabilité explicite: {margin:.6g}")
+            if margin >= 0.0:
+                print("Stable (marge positive)")
+            else:
+                print("Non stable.")
+        elif self.param.scheme == "semi_implicit":
+            margin = self.semi_implicit_stability_margin()
+            print(f"Marge de stabilité semi-implicite: {margin:.6g}")
+            if margin >= 0.0:
+                print("Stable (marge positive)")
+            else:
+                print("Non stable.")
+        else:
+            print("Schéma inconnu pour l'analyse de stabilité.")
+
+    def reset_auxiliary_field(self):
+        """Recalcule F à partir de u et u_prev pour assurer la cohérence après une modification manuelle de u."""
+        self.F = self.param.b * _laplacian_all(self.u, self.param.dx ** 2)
+        _apply_boundary(self.F, self.bc_type)
 
     def initialize(self, ic_type="gaussian"):
         if ic_type == "gaussian":
@@ -199,9 +225,14 @@ class WesterveltSolver:
     def run_stability_scan(self, dt_values, amplitude_values, ic_type="gaussian", blowup_threshold=1e6):
         """Balaye (dt, amplitude initiale) et renvoie un diagnostic de stabilité."""
         results = []
+        stability_margin = np.nan
+        theoretical_stable = False
+        tol = 1e-12
 
         for dt in dt_values:
             for amp in amplitude_values:
+                min_denom = np.inf
+
                 test_params = WesterveltParams(
                     c=self.param.c,
                     rho0=self.param.rho0,
@@ -218,11 +249,17 @@ class WesterveltSolver:
                 test_solver.initialize(ic_type=ic_type)
                 test_solver.u *= float(amp)
                 test_solver.u_prev = test_solver.u.copy()
+                test_solver.reset_auxiliary_field()
 
                 stable = True
                 max_abs = 0.0
                 for _ in range(test_params.nt):
+                    denom = 1.0 - 2.0 * test_solver.param.k * test_solver.u
+                    cur_min = float(np.min(denom))
+                    min_denom = min(min_denom, cur_min)
+
                     test_solver.step()
+
                     cur = float(np.max(np.abs(test_solver.u)))
                     if not np.isfinite(cur) or cur > blowup_threshold:
                         stable = False
@@ -231,15 +268,32 @@ class WesterveltSolver:
                     if cur > max_abs:
                         max_abs = cur
 
+                    if test_solver.param.scheme == "explicit":
+                        stability_margin = test_solver.explicit_stability_margin()
+                        theoretical_stable = test_solver.explicit_theoretical_stable()
+                    elif test_solver.param.scheme == "semi_implicit":
+                        stability_margin = test_solver.semi_implicit_stability_margin()
+                        theoretical_stable = test_solver.semi_implicit_theoretical_stable()
+                    else:
+                        stability_margin = np.nan
+                        theoretical_stable = False
+
                 results.append(
                     {
                         "dt": float(dt),
                         "amplitude": float(amp),
                         "stable": stable,
-                        "lambda": float(test_solver._lambda_number()),
-                        "lambda_stable": bool(test_solver._is_lambda_stable()),
                         "max_abs_u": float(max_abs),
+
                         "cfl": float(test_params.c * test_params.dt / test_params.dx),
+                        "lambda_legacy": float(test_solver._lambda_number()),
+
+                        "min_denom": float(min_denom),
+                        "nondegenerate": bool(min_denom > tol),
+
+                        "stability_margin": float(stability_margin),
+
+                        "theoretical_stable": bool(theoretical_stable),
                     }
                 )
 

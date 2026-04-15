@@ -10,10 +10,20 @@ def _laplacian(u, i, dx2):
 
 def _laplacian_all(u, dx2):
     """Laplacien centré sur tout le domaine (bords laissés à 0)."""
-    nx = u.shape[0]
     out = np.zeros_like(u)
-    for i in range(1, nx - 1):
-        out[i] = (u[i + 1] - 2.0 * u[i] + u[i - 1]) / dx2
+    out[1:-1] = (u[2:] - 2.0 * u[1:-1] + u[:-2]) / dx2
+    return out
+
+
+def _spatial_derivative(u, i, dx):
+    """D_x^- u^n au point i."""
+    return (u[i + 1] - u[i - 1]) / (2.0 * dx)
+
+
+def _spatial_derivative_all(u, dx):
+    """D_x^- u^n. (bords laissés à 0)"""
+    out = np.zeros_like(u)
+    out[1:-1] = (u[2:] - u[:-2]) / (2.0 * dx)
     return out
 
 
@@ -23,11 +33,23 @@ def _time_derivative(u, u_prev, dt):
 
 
 def _safe_denominator(denom, eps=1e-12):
-    """Evite les divisions par 0 dans 1 - 2k u^n."""
+    """Régularisation purement numérique pour éviter une division machine par 0.
+    Ne remplace pas un test de non-dégénérescence mathématique.
+    """
     safe = denom.copy()
     mask = np.abs(safe) < eps
     safe[mask] = eps * np.where(safe[mask] >= 0.0, 1.0, -1.0)
     return safe
+
+
+def _check_nondegeneracy(u, k, tol=1e-12):
+    """Vérifie que 1 - 2k u > 0 pour éviter une dégénérescence mathématique."""
+    denom = 1.0 - 2.0 * k * u
+    min_denom = float(np.min(denom))
+    return {
+        "min_denom": min_denom,
+        "nondegenerate": bool(min_denom > tol),
+    }
 
 
 def _apply_boundary(u, bc_type):
@@ -74,28 +96,19 @@ def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
     diag = np.zeros(n_int, dtype=u_n.dtype)
     upper = np.zeros(n_int - 1, dtype=u_n.dtype)
     rhs = rhs_full[1:-1].copy()
+    lam_int = lam_full[1:-1].copy
 
-    for j in range(n_int):
-        i = j + 1
-        lam = lam_full[i]
+    lower = lam_int[1:].copy()
+    upper = lam_int[:-1].copy()
 
-        if bc_type == 0: # Dirichlet
-            diag[j] = 1.0 + 2.0 * lam
-            if j > 0:
-                lower[j - 1] = -lam
-            if j < n_int - 1:
-                upper[j] = -lam
-        elif bc_type == 1: # Neumann
-            if j == 0 or j == n_int - 1:
-                diag[j] = 1.0 + lam
-            else:
-                diag[j] = 1.0 + 2.0 * lam
-            if j > 0:
-                lower[j - 1] = -lam
-            if j < n_int - 1:
-                upper[j] = -lam
-        else:
-            raise ValueError("bc_type doit valoir 0 (Dirichlet) ou 1 (Neumann).")
+    if bc_type == 0: # Dirichlet
+        diag = 1.0 + 2.0 * lam_int
+    elif bc_type == 1: # Neumann
+        diag[0] = 1.0 + lam_int[0]
+        diag[-1] = 1.0 + lam_int[-1]
+        diag[1:-1] = 1.0 + 2.0 * lam_int[1:-1]
+    else:
+        raise ValueError("bc_type doit valoir 0 (Dirichlet) ou 1 (Neumann).")
 
     return lower, diag, upper, rhs
 
@@ -133,10 +146,5 @@ def solve_tridiagonal(lower, diag, upper, rhs):
 def compute_energy(u, u_prev, c, dt, dx):
     """Energie discrète: 0.5 * int((u_t)^2 + c^2 (u_x)^2) dx."""
     ut = _time_derivative(u, u_prev, dt)
-
-    ux = np.zeros_like(u)
-    inv_2dx = 0.5 / dx
-    for i in range(1, u.shape[0] - 1):
-        ux[i] = (u[i + 1] - u[i - 1]) * inv_2dx
-
+    ux = _spatial_derivative_all(u, dx ** 2)
     return 0.5 * dx * np.sum(ut**2 + c**2 * ux**2)

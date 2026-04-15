@@ -14,7 +14,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from src.solver import WesterveltSolver, WesterveltParams
-from src.analysis import (
+from src.postprocessing import (
     plot_stability_detailed,
     plot_snapshots_energy_comparison,
     plot_scheme_comparison,
@@ -382,7 +382,7 @@ Vous avez maintenant accès à:
    ✅ Ce script (Exemples exécutables)
 
 🔧 CODE SOURCE:
-   ✅ src/analysis.py (4 fonctions avec subplot_mosaic)
+   ✅ src/postprocessing.py (4 fonctions avec subplot_mosaic)
    ✅ src/solver.py (3 méthodes de base)
 
 ═════════════════════════════════════════════════════════════════

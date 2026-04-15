@@ -1,4 +1,4 @@
-# src/analysis.py
+# src/postprocessing.py
 
 import numpy as np
 import matplotlib.pyplot as plt
