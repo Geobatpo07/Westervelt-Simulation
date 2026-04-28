@@ -13,14 +13,14 @@ Le projet utilise la variable auxiliaire $F$ et deux modes de simulation :
 
 $$
 \begin{cases}
-F_i^{n+1}=F_i^n+\Delta t\left(c^2\delta_{xx}u_i^n+2k(D_t^-u_i^n)^2\right),\\[0.4em]
+F_i^{n+1}=F_i^n+\Delta t\,c^2\delta_{xx}u_i^n,\\[0.4em]
 u_i^{n+1}=u_i^n+\Delta t\,\dfrac{F_i^{n+1}+b\,\delta_{xx}u_i^n}{1-2ku_i^n}.
 \end{cases}
 $$
 
 $$
 \begin{cases}
-F_i^{n+1}=F_i^n+\Delta t\left(c^2\delta_{xx}u_i^n+2k(D_t^-u_i^n)^2\right),\\[0.4em]
+F_i^{n+1}=F_i^n+\Delta t\,c^2\delta_{xx}u_i^n,\\[0.4em]
 u_i^{n+1}=u_i^n+\Delta t\,\dfrac{F_i^{n+1}+b\,\delta_{xx}u_i^{n+1}}{1-2ku_i^n}.
 \end{cases}
 $$
@@ -79,11 +79,11 @@ params = WesterveltParams(
     scheme="semi_implicit",
 )
 solver = WesterveltSolver(params)
-solver.initialize("gaussian")
+solver.initialize(u0_type="gaussian", u1_type="zero")
 
 snapshots = solver.run_with_snapshots([0, 1e-6, 2e-6, 4e-6], store_energy=True)
 solver.plot_snapshots(snapshots)
 solver.plot_energy()
 ```
 
-Consultez aussi `notebooks/prresentation_01.ipynb` et `notebooks/test_solver.ipynb`.
+Consultez aussi `notebooks/presentation_01.ipynb` et `notebooks/test_solver.ipynb`.

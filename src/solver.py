@@ -74,25 +74,31 @@ class WesterveltSolver:
         self.energy_history = []
         self.check_stability_indicators()
 
+
     def _lambda_number(self):
         """Nombre lambda = c^2 dt / dx^2."""
         return float((self.param.c ** 2) * self.param.dt / (self.param.dx ** 2))
+
 
     def explicit_stability_margin(self):
         """Indication de marge de stabilité théorique pour le schéma explicite."""
         return self.param.dx ** 2 - (self.param.c ** 2 * self.param.dt ** 2 + 2 * self.param.b * self.param.dt)
 
+
     def explicit_theoretical_stable(self):
         """Indication de stabilité théorique pour le schéma explicite."""
         return self.explicit_stability_margin() >= 0.0
+
 
     def semi_implicit_stability_margin(self, alpha=1.0):
         """Indication de marge de stabilité théorique pour le schéma semi-implicite."""
         return alpha * self.param.dx ** 2 - (self.param.c ** 2 * self.param.dt ** 2 - 2 * self.param.b * self.param.dt)
 
+
     def semi_implicit_theoretical_stable(self, alpha=1.0):
         """Indication de stabilité théorique pour le schéma semi-implicite."""
         return self.semi_implicit_stability_margin(alpha=alpha) >= 0.0
+
 
     def check_stability_indicators(self):
         """Affiche les indicateurs de stabilité (CFL, lambda) et les marges de stabilité pour le schéma choisi."""
@@ -118,39 +124,95 @@ class WesterveltSolver:
         else:
             print("Schéma inconnu pour l'analyse de stabilité.")
 
-    def reset_auxiliary_field(self):
-        """Recalcule F à partir de u et u_prev pour assurer la cohérence après une modification manuelle de u."""
-        self.F = self.param.b * _laplacian_all(self.u, self.param.dx ** 2)
+    def reset_auxiliary_field(self, u_t0=None):
+        """
+        Recalcule F à partir de u et d'une vitesse initiale u_t0.
+
+        F = (1 - 2ku) u_t - b u_xx.
+
+        Si u_t0=None, on approxime u_t par (u - u_prev)/dt.
+        """
+        if u_t0 is None:
+            u_t0 = (self.u - self.u_prev) / self.param.dt
+
+        denom = 1.0 - 2.0 * self.param.k * self.u
+        self.F = denom * u_t0 - self.param.b * _laplacian_all(self.u, self.param.dx ** 2)
+
         _apply_boundary(self.F, self.bc_type)
 
-    def initialize(self, ic_type="gaussian"):
-        if ic_type == "gaussian":
-            center = self.x.max() / 4.0
-            width = max(self.x.max() / 20.0, 1e-12)
-            self.u = np.exp(-((self.x - center) / width) ** 2)
-        elif ic_type == "uniform":
-            self.u = np.random.uniform(-0.1, 0.1, self.param.nx)
+
+    def _initial_profile(self, profile_type, amplitude=1.0, mu=None, sigma=None):
+        """Construit un profil initial u0 ou u1."""
+
+        if mu is None:
+            mu = self.x.max() / 4.0
+
+        if sigma is None:
+            sigma = max(self.x.max() / 20.0, 1e-12)
+
+        if profile_type == "zero":
+            profile = np.zeros_like(self.x)
+
+        elif profile_type == "gaussian":
+            profile = np.exp(-((self.x - mu) ** 2) / (2.0 * sigma ** 2))
+
+        elif profile_type == "gaussian_derivative":
+            profile = (self.x - mu) * np.exp(-((self.x - mu) ** 2) / (2.0 * sigma ** 2))
+
+        elif profile_type == "uniform":
+            profile = np.random.uniform(-0.1, 0.1, self.param.nx)
+
         else:
-            raise ValueError("Type d'initialisation non reconnu.")
+            raise ValueError(f"Profil initial non reconnu : {profile_type}")
 
-        self.u_prev = self.u.copy()
-        # F^0 cohérent avec F=(1-2ku)u_t - b u_xx et u_t^0=0.
-        self.F = -self.param.b * _laplacian_all(self.u, self.param.dx * self.param.dx)
-        _apply_boundary(self.F, self.bc_type)
+        return amplitude * profile
+
+    def initialize(self, u0_type="gaussian", u1_type="zero", A1=1.0, A2=0.0, mu=None, sigma1=None, sigma2=None):
+        """Initialise u^0 = u0 et u_t^0 = u1."""
+
+        u0 = self._initial_profile(
+            profile_type=u0_type,
+            amplitude=A1,
+            mu=mu,
+            sigma=sigma1,
+        )
+
+        u1 = self._initial_profile(
+            profile_type=u1_type,
+            amplitude=A2,
+            mu=mu,
+            sigma=sigma2,
+        )
+
+        self.u = u0.copy()
+        _apply_boundary(self.u, self.bc_type)
+
+        _apply_boundary(u1, self.bc_type)
+
+        self.u_prev = self.u - self.param.dt * u1
+        _apply_boundary(self.u_prev, self.bc_type)
+
+        self.reset_auxiliary_field(u_t0=u1)
+
         self.energy_history = [self.compute_energy()]
+
 
     @property
     def bc_type(self):
+        """Retourne 0 pour Dirichlet et 1 pour Neumann, utilisé dans les fonctions de mise à jour."""
         return 0 if self.param.bc == "dirichlet" else 1
 
+
     def compute_energy(self):
+        """Calcule l'energie totale de la solution."""
         return float(compute_energy(self.u, self.u_prev, self.param.c, self.param.dt, self.param.dx))
 
+
     def step(self):
+        """Effectue une étape de temps selon le schéma choisi."""
         if self.param.scheme == "semi_implicit":
             self.u_next, F_next = step_semi_implicit(
                 self.u,
-                self.u_prev,
                 self.F,
                 self.param.c,
                 self.param.b,
@@ -162,7 +224,6 @@ class WesterveltSolver:
         else:
             self.u_next, F_next = step_explicit(
                 self.u,
-                self.u_prev,
                 self.F,
                 self.param.c,
                 self.param.b,
@@ -177,7 +238,10 @@ class WesterveltSolver:
         self.u_prev = self.u.copy()
         self.u = self.u_next.copy()
 
+
     def run(self, store_energy=True):
+        """Fait tourner la simulation pour le nombre de pas de temps spécifié dans les paramètres.
+        Si store_energy=True, stocke l'énergie à chaque pas de temps dans self.energy_history."""
         if store_energy and len(self.energy_history) == 0:
             self.energy_history.append(self.compute_energy())
 
@@ -186,7 +250,9 @@ class WesterveltSolver:
             if store_energy:
                 self.energy_history.append(self.compute_energy())
 
+
     def plot_solution(self):
+        """Affiche la solution finale."""
         plt.figure(figsize=(10, 4))
         plt.plot(self.x, self.u)
         plt.title("Solution finale")
@@ -195,7 +261,10 @@ class WesterveltSolver:
         plt.grid(True)
         plt.show()
 
+
     def run_with_snapshots(self, times_to_save, store_energy=True):
+        """Fait tourner la simulation et sauvegarde des snapshots de u à des temps spécifiés dans times_to_save (en secondes).
+         Renvoie un dictionnaire {t: u_snapshot} pour les temps demandés. Si store_energy=True, stocke aussi l'énergie à chaque pas de temps dans self.energy_history."""
         if times_to_save is None:
             times_to_save = []
 
@@ -222,16 +291,28 @@ class WesterveltSolver:
 
         return snapshots
 
-    def run_stability_scan(self, dt_values, amplitude_values, ic_type="gaussian", blowup_threshold=1e6):
-        """Balaye (dt, amplitude initiale) et renvoie un diagnostic de stabilité."""
+    def run_stability_scan(
+            self,
+            dt_values,
+            amplitude_values,
+            u0_type="gaussian",
+            u1_type="zero",
+            velocity_amplitude=0.0,
+            mu=None,
+            sigma1=None,
+            sigma2=None,
+            blowup_threshold=1e6,
+    ):
+        """Balaye (dt, amplitude de u0) et renvoie un diagnostic de stabilité."""
+
         results = []
-        stability_margin = np.nan
-        theoretical_stable = False
         tol = 1e-12
 
         for dt in dt_values:
             for amp in amplitude_values:
                 min_denom = np.inf
+                max_abs = 0.0
+                stable = True
 
                 test_params = WesterveltParams(
                     c=self.param.c,
@@ -245,44 +326,59 @@ class WesterveltSolver:
                     bc=self.param.bc,
                     scheme=self.param.scheme,
                 )
-                test_solver = WesterveltSolver(test_params)
-                test_solver.initialize(ic_type=ic_type)
-                test_solver.u *= float(amp)
-                test_solver.u_prev = test_solver.u.copy()
-                test_solver.reset_auxiliary_field()
 
-                stable = True
-                max_abs = 0.0
+                test_solver = WesterveltSolver(test_params)
+
+                test_solver.initialize(
+                    u0_type=u0_type,
+                    u1_type=u1_type,
+                    A1=float(amp),
+                    A2=float(velocity_amplitude),
+                    mu=mu,
+                    sigma1=sigma1,
+                    sigma2=sigma2,
+                )
+
+                if test_solver.param.scheme == "explicit":
+                    stability_margin = test_solver.explicit_stability_margin()
+                    theoretical_stable = test_solver.explicit_theoretical_stable()
+                elif test_solver.param.scheme == "semi_implicit":
+                    stability_margin = test_solver.semi_implicit_stability_margin()
+                    theoretical_stable = test_solver.semi_implicit_theoretical_stable()
+                else:
+                    stability_margin = np.nan
+                    theoretical_stable = False
+
                 for _ in range(test_params.nt):
                     denom = 1.0 - 2.0 * test_solver.param.k * test_solver.u
                     cur_min = float(np.min(denom))
                     min_denom = min(min_denom, cur_min)
 
+                    if cur_min <= tol:
+                        stable = False
+                        break
+
                     test_solver.step()
 
                     cur = float(np.max(np.abs(test_solver.u)))
+
                     if not np.isfinite(cur) or cur > blowup_threshold:
                         stable = False
                         max_abs = cur
                         break
-                    if cur > max_abs:
-                        max_abs = cur
 
-                    if test_solver.param.scheme == "explicit":
-                        stability_margin = test_solver.explicit_stability_margin()
-                        theoretical_stable = test_solver.explicit_theoretical_stable()
-                    elif test_solver.param.scheme == "semi_implicit":
-                        stability_margin = test_solver.semi_implicit_stability_margin()
-                        theoretical_stable = test_solver.semi_implicit_theoretical_stable()
-                    else:
-                        stability_margin = np.nan
-                        theoretical_stable = False
+                    max_abs = max(max_abs, cur)
 
                 results.append(
                     {
                         "dt": float(dt),
-                        "amplitude": float(amp),
-                        "stable": stable,
+                        "amplitude_u0": float(amp),
+                        "amplitude_u1": float(velocity_amplitude),
+
+                        "u0_type": u0_type,
+                        "u1_type": u1_type,
+
+                        "stable": bool(stable),
                         "max_abs_u": float(max_abs),
 
                         "cfl": float(test_params.c * test_params.dt / test_params.dx),
@@ -292,14 +388,15 @@ class WesterveltSolver:
                         "nondegenerate": bool(min_denom > tol),
 
                         "stability_margin": float(stability_margin),
-
                         "theoretical_stable": bool(theoretical_stable),
                     }
                 )
 
         return results
 
+
     def plot_snapshots(self, snapshots):
+        """Affiche les snapshots de la solution u(x) à différents temps."""
         plt.figure(figsize=(10, 6))
         for t in sorted(snapshots.keys()):
             plt.plot(self.x, snapshots[t], label=f"t = {t * 1e6:.2f} us")

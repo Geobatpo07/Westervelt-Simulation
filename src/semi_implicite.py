@@ -9,13 +9,13 @@ from src.numerics import (
 )
 
 
-def step_semi_implicit(u, u_prev, F, c, b, k, dt, dx, bc_type):
+def step_semi_implicit(u, F, c, b, k, dt, dx, bc_type):
     """
     Schéma semi-implicite:
-      F^{n+1} = F^n + dt(c^2 Δu^n + 2k(D_t^-u^n)^2)
+      F^{n+1} = F^n + dt c^2 Δu^n
       u^{n+1} = u^n + dt(F^{n+1} + bΔu^{n+1})/(1 - 2k u^n)
     """
-    F_next = update_F(F, u, u_prev, dt, dx, c, k, bc_type)
+    F_next = update_F(F, u, dt, dx, c, bc_type)
 
     lower, diag, upper, rhs = assemble_semi_implicit_system(u, F_next, dt, dx, b, k, bc_type)
     interior = solve_tridiagonal(lower, diag, upper, rhs)

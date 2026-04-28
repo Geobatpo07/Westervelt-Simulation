@@ -11,7 +11,7 @@ def run_snapshots(solver: WesterveltSolver, times_to_save):
     return solver.run_with_snapshots(times_to_save, store_energy=True)
 
 
-def compute_energy_history(solver: WesterveltSolver):
+def get_energy_history(solver: WesterveltSolver):
     """Renvoie l'historique d'énergie déjà stocké par le solver."""
     return np.array(solver.energy_history, dtype=float)
 
@@ -37,7 +37,7 @@ def plot_stability_scan(results):
     plt.colorbar(label="1 = stable, 0 = instable")
     plt.xlabel("dt")
     plt.ylabel("Amplitude initiale")
-    plt.title("Carte de stabilité")
+    plt.title("Carte de stabilité observée")
     plt.grid(False)
     plt.show()
 
@@ -45,7 +45,11 @@ def plot_stability_scan(results):
 def plot_stability_detailed(results):
     """
     Analyse comparative détaillée de la stabilité avec subplot_mosaic.
-    Affiche: stabilité, lambda, et max|u| pour une meilleure compréhension.
+    Affiche :
+    - stabilité observée
+    - marge de stabilité théorique
+    - minimum de 1 - 2ku
+    - maximum de |u|
     """
     if len(results) == 0:
         return
@@ -53,18 +57,19 @@ def plot_stability_detailed(results):
     dt_vals, amp_vals = get_scan_axes(results)
 
     # Construire les grilles de metriques a partir d'un utilitaire commun
-    stable_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: 1.0 if r["stable"] else 0.0)
-    lambda_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: r.get("lambda", 0.0))
-    max_u_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: r.get("max_abs_u", 0.0))
+    stable_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: 1.0 if r.get("stable", False) else 0.0)
+    margin_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: r.get("stability_margin", np.nan))
+    min_denom_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: r.get("min_denom", np.nan))
+    max_u_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: r.get("max_abs_u", np.nan))
 
-    # Utiliser subplot_mosaic pour une disposition flexible
+    # Création des sous-figures avec subplot_mosaic pour une meilleure organisation visuelle
     fig, axs = plt.subplot_mosaic(
-        [["stability", "cfl"], ["max_u", "max_u"]],
+        [["stability", "margin"], ["min_denom", "max_u"]],
         figsize=(14, 10),
         constrained_layout=True
     )
 
-    # Carte de stabilité
+    # Affichage des sous-figures
     im1 = axs["stability"].imshow(
         stable_grid,
         origin="lower",
@@ -76,24 +81,34 @@ def plot_stability_detailed(results):
     )
     axs["stability"].set_xlabel("dt (s)")
     axs["stability"].set_ylabel("Amplitude initiale")
-    axs["stability"].set_title("Stabilité numérique")
-    plt.colorbar(im1, ax=axs["stability"], label="1=stable, 0=instable")
+    axs["stability"].set_title("Stabilité observée")
+    plt.colorbar(im1, ax=axs["stability"], label="1 = stable")
 
-    # Carte CFL
-    im2 = axs["cfl"].imshow(
-        lambda_grid,
+    im2 = axs["margin"].imshow(
+        margin_grid,
+        origin="lower",
+        aspect="auto",
+        extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
+        cmap="coolwarm",
+    )
+    axs["margin"].set_xlabel("dt (s)")
+    axs["margin"].set_ylabel("Amplitude initiale")
+    axs["margin"].set_title("Marge de stabilité théorique")
+    plt.colorbar(im2, ax=axs["margin"], label="marge")
+
+    im3 = axs["min_denom"].imshow(
+        min_denom_grid,
         origin="lower",
         aspect="auto",
         extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
         cmap="viridis",
     )
-    axs["cfl"].set_xlabel("dt (s)")
-    axs["cfl"].set_ylabel("Amplitude initiale")
-    axs["cfl"].set_title("Nombre lambda (stabilité)")
-    plt.colorbar(im2, ax=axs["cfl"], label="lambda")
+    axs["min_denom"].set_xlabel("dt (s)")
+    axs["min_denom"].set_ylabel("Amplitude initiale")
+    axs["min_denom"].set_title("Minimum de 1 - 2ku")
+    plt.colorbar(im3, ax=axs["min_denom"], label="min denom")
 
-    # Valeur maximale de |u|
-    im3 = axs["max_u"].imshow(
+    im4 = axs["max_u"].imshow(
         max_u_grid,
         origin="lower",
         aspect="auto",
@@ -103,9 +118,83 @@ def plot_stability_detailed(results):
     axs["max_u"].set_xlabel("dt (s)")
     axs["max_u"].set_ylabel("Amplitude initiale")
     axs["max_u"].set_title("Valeur maximale de |u| durant la simulation")
-    plt.colorbar(im3, ax=axs["max_u"], label="max|u|")
+    plt.colorbar(im4, ax=axs["max_u"], label="max|u|")
 
-    plt.suptitle("Analyse comparative de stabilité numérique", fontsize=14, fontweight="bold")
+    plt.suptitle("Analyse détaillée de stabilité", fontsize=14, fontweight="bold")
+    plt.show()
+
+
+def plot_theory_vs_observed(results):
+    """
+    Affiche côte à côte la stabilité théorique et observée, ainsi que leur différence.
+    Utilise subplot_mosaic pour une meilleure organisation visuelle.
+    """
+    if len(results) == 0:
+        return
+
+    dt_vals, amp_vals = get_scan_axes(results)
+
+    theoretical_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: 1.0 if r.get("theoretical_stable", False) else 0.0)
+    observed_grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: 1.0 if r.get("stable", False) else 0.0)
+
+    diff_grid = observed_grid - theoretical_grid
+
+    fig, axs = plt.subplot_mosaic(
+        [["theory", "observed"], ["difference", "difference"]],
+        figsize=(14, 10),
+        constrained_layout=True
+    )
+
+    im1 = axs["theory"].imshow(
+        theoretical_grid,
+        origin="lower",
+        aspect="auto",
+        extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
+        vmin=0.0,
+        vmax=1.0,
+        cmap="RdYlGn",
+    )
+    axs["theory"].set_title("Stabilité théorique")
+    axs["theory"].set_xlabel("dt (s)")
+    axs["theory"].set_ylabel("Amplitude initiale")
+    plt.colorbar(im1, ax=axs["theory"], label="théorie")
+
+    im2 = axs["observed"].imshow(
+        observed_grid,
+        origin="lower",
+        aspect="auto",
+        extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
+        vmin=0.0,
+        vmax=1.0,
+        cmap="RdYlGn",
+    )
+    axs["observed"].set_title("Stabilité observée")
+    axs["observed"].set_xlabel("dt (s)")
+    axs["observed"].set_ylabel("Amplitude initiale")
+    plt.colorbar(im2, ax=axs["observed"], label="observé")
+
+    im3 = axs["difference"].imshow(
+        diff_grid,
+        origin="lower",
+        aspect="auto",
+        extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
+        vmin=-1.0,
+        vmax=1.0,
+        cmap="RdBu_r",
+    )
+    axs["difference"].set_xlabel("dt (s)")
+    axs["difference"].set_ylabel("Amplitude initiale")
+    axs["difference"].set_title("Différence (Observé - Théorie)")
+    axs["difference"].text(
+        0.5, 1.05,
+        "Bleu: Observé plus stable | Rouge: Théorie plus stable",
+        ha="center",
+        transform=axs["difference"].transAxes,
+        fontsize=9
+    )
+    plt.colorbar(im3, ax=axs["difference"], label="différence")
+
+    plt.suptitle("Comparaison théorie / expérience", fontsize=14, fontweight="bold")
     plt.show()
 
 

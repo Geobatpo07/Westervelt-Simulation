@@ -3,13 +3,13 @@
 from src.numerics import _apply_boundary, _laplacian_all, _safe_denominator, update_F
 
 
-def step_explicit(u, u_prev, F, c, b, k, dt, dx, bc_type):
+def step_explicit(u, F, c, b, k, dt, dx, bc_type):
     """
     Schéma explicite:
-      F^{n+1} = F^n + dt(c^2 Δu^n + 2k(D_t^-u^n)^2)
+      F^{n+1} = F^n + dt c^2 Δu^n
       u^{n+1} = u^n + dt(F^{n+1} + bΔu^n)/(1 - 2k u^n)
     """
-    F_next = update_F(F, u, u_prev, dt, dx, c, k, bc_type)
+    F_next = update_F(F, u, dt, dx, c, bc_type)
 
     dx2 = dx * dx
     lap_u = _laplacian_all(u, dx2)

@@ -1,42 +1,35 @@
 """
-Analyse de Fourier du schéma explicite de Westervelt.
+Analyse de Fourier du schema semi-implicite de Westervelt.
 
-Ce script réalise une analyse de stabilité, de dispersion et d’amortissement
-dans le régime linéarisé (k = 0) sur une grille périodique.
+Ce script realise une analyse de stabilite, de dispersion et d'amortissement
+dans le regime linearise par gel de alpha sur une grille periodique.
 
-On considère un mode de Fourier de la forme :
+On considere un mode de Fourier de la forme :
     u_i^n = G^n exp(i i theta),
-où theta = kappa * dx est le nombre d’onde réduit.
+ou theta = kappa * dx est le nombre d'onde reduit.
 
-Pour le schéma explicite, on obtient la récurrence :
-    u^{n+1} = [2 - sigma (CFL^2 + D)] u^n + [-1 + sigma D] u^{n-1}
+Pour le schema semi-implicite (gel de alpha), on utilise directement la
+matrice d'amplification deja implementee dans src.stability_analysis.
 
-avec :
-    sigma = 4 sin^2(theta / 2)
-    CFL   = c dt / dx
-    D     = b dt / dx^2   (nombre de diffusion discret sans dimension)
+Le script s'appuie sur la matrice d'amplification pour :
+    - calculer le rayon spectral (critere de stabilite),
+    - selectionner la branche physique du facteur d'amplification,
+    - comparer la reponse numerique a la reponse analytique du modele continu linearise gele.
 
-Le facteur d’amplification G est donné par les racines du polynôme :
-    G^2 - [2 - sigma (CFL^2 + D)] G + [1 - sigma D] = 0
-
-Le script s’appuie sur la matrice d’amplification pour :
-    - calculer le rayon spectral (critère de stabilité),
-    - sélectionner la branche physique du facteur d’amplification,
-    - comparer la réponse numérique à la réponse analytique du modèle continu linéarisé.
+Le mode nul (theta = 0, donc mu = 0) est traite separement, conformement
+a l'analyse theorique : il est neutre (rho(A(0)) = 1), mais ne releve pas
+de la meme lecture dispersion/amortissement que les modes non nuls.
 
 Trois types de graphiques sont produits :
-1. Module du facteur d’amplification et dispersion numérique en fonction de theta,
-2. Représentation paramétrique du compromis amplification / dispersion,
-3. Effet du nombre de diffusion sur l’amortissement des modes de Fourier.
+1. Module du facteur d'amplification et dispersion numerique en fonction de theta,
+2. Representation parametrique du compromis amplification / dispersion,
+3. Effet du nombre de diffusion sur l'amortissement des modes de Fourier.
 
-Le taux d’amortissement est défini par :
+Le taux d'amortissement est defini par :
     alpha_num(theta) = -log(|G(theta)|) / dt
 
-Les résultats numériques sont comparés aux valeurs analytiques issues de la
-relation de dispersion du modèle continu linéarisé.
-
-Les figures sont enregistrées dans :
-    outputs/analysis/explicit-fourier-analysis
+Les figures sont enregistrees dans :
+    outputs/analysis/semi-implicit-fourier-analysis
 avec versioning automatique.
 """
 
@@ -54,24 +47,23 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-FOURIER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "analysis" / "explicit-fourier-analysis"
+FOURIER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "analysis" / "semi-implicit-fourier-analysis"
+ALPHA_LINEARIZED = 0.1
+STABILITY_TOL = 1e-10
 
 from src.solver import WesterveltParams
 from src.stability_analysis import (
-    amplification_matrix_explicite,
+    amplification_matrix_semi_implicite,
     discrete_mu,
-    explicit_stability_margin,
-    explicit_theoretical_stable,
+    semi_implicit_stability_margin,
+    semi_implicit_theoretical_stable,
 )
 from utils import save_figure_with_version, set_style
 
 
-STABILITY_TOL = 1e-10
-
-
 @dataclass(frozen=True)
 class FourierCurve:
-    """Courbe Fourier pour un couple (CFL, diffusion) donne."""
+    """Courbe Fourier pour un couple (CFL, D) donne."""
 
     cfl: float
     D: float
@@ -84,61 +76,103 @@ def _theta_grid(num_points: int = 500) -> np.ndarray:
     return np.linspace(0.0, np.pi, num_points)
 
 
-def select_physical_branch_from_matrix(theta, params, dt, b):
+def _effective_dt_and_b(params: WesterveltParams, cfl: float, D: float) -> tuple[float, float]:
+    """Convertit (CFL, D) en (dt_effectif, b_effectif)."""
+    dt_eff = cfl * params.dx / params.c
+    if dt_eff <= 0.0:
+        raise ValueError("Le CFL doit etre strictement positif pour evaluer la stabilite.")
+    b_eff = D * params.dx**2 / dt_eff
+    return float(dt_eff), float(b_eff)
+
+
+def analyze_zero_mode(dt: float, alpha: float) -> dict[str, float | bool | str]:
+    """
+    Analyse du mode nul mu = 0 pour le schema semi-implicite.
+
+    Pour mu = 0, la matrice d'amplification theorique vaut :
+        A(0) = [[1, tau], [0, 1]], tau = dt / alpha
+    donc rho(A(0)) = 1, mais A(0) n'est pas diagonalisable.
+    """
+    tau = dt / alpha
+    return {
+        "tau": float(tau),
+        "spectral_radius": 1.0,
+        "neutral_mode": True,
+        "diagonalisable": False,
+        "comment": (
+            "Le mode nul est neutre (rho=1), mais la matrice d'amplification "
+            "n'est pas diagonalisable. Une croissance lineaire en temps peut apparaitre "
+            "si la composante moyenne initiale de F n'est pas nulle."
+        ),
+    }
+
+
+def select_physical_branch_from_matrix(
+    theta: np.ndarray,
+    params: WesterveltParams,
+    dt: float,
+    b: float,
+    alpha: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Selectionne une branche physique continue parmi les valeurs propres
+    pour les modes non nuls, et traite separement le mode nul.
+    """
     mu_values = discrete_mu(theta, params.dx)
 
     physical = np.empty_like(theta, dtype=complex)
     rho = np.empty_like(theta, dtype=float)
 
+    # Mode nul : traitement separe
     physical[0] = 1.0 + 0.0j
     rho[0] = 1.0
-    previous = 1.0 + 0.0j
 
-    for i, mu in enumerate(mu_values):
-        A = amplification_matrix_explicite(float(mu), dt, params.c, b)
+    previous = physical[0]
+
+    # Modes non nuls : analyse spectrale
+    for i, mu in enumerate(mu_values[1:], start=1):
+        A = amplification_matrix_semi_implicite(float(mu), dt, params.c, b, alpha=alpha)
         eigenvalues = np.linalg.eigvals(A)
         rho[i] = np.max(np.abs(eigenvalues))
 
-        omega_candidates = - np.angle(eigenvalues) / dt
-
-        # racines physiques admissibles
-        valid_idx = np.where(np.abs(omega_candidates) >= 0.0)[0]
-
-        if len(valid_idx) == 1:
-            chosen = eigenvalues[valid_idx[0]]
-        elif len(valid_idx) == 2:
-            # si les deux sont admissibles, on garde la continuite
-            idx_local = valid_idx[np.argmin(np.abs(eigenvalues[valid_idx] - previous))]
-            chosen = eigenvalues[idx_local]
-        else:
-            idx_local = np.argmin(np.abs(eigenvalues - previous))
-            chosen = eigenvalues[idx_local]
+        # Selection par continuite de branche
+        idx_local = np.argmin(np.abs(eigenvalues - previous))
+        chosen = eigenvalues[idx_local]
 
         physical[i] = chosen
         previous = chosen
 
     return physical, rho
 
+
 def compute_numerical_response(
     theta: np.ndarray,
     params: WesterveltParams,
     cfl: float,
     D: float,
+    alpha: float = ALPHA_LINEARIZED,
 ) -> dict[str, np.ndarray]:
-    """Retourne les indicateurs numeriques via la matrice d'amplification."""
+    """Retourne les indicateurs numeriques via la matrice d'amplification semi-implicite."""
     dt_eff, b_eff = _effective_dt_and_b(params, cfl, D)
 
-    g_phys, rho = select_physical_branch_from_matrix(theta, params, dt_eff, b_eff)
+    g_phys, rho = select_physical_branch_from_matrix(theta, params, dt_eff, b_eff, alpha=alpha)
 
     phase = np.unwrap(np.angle(g_phys))
     omega_num = phase / dt_eff
     kappa = theta / params.dx
 
-    phase_velocity_ratio = np.ones_like(theta)
+    phase_velocity_ratio = np.full_like(theta, np.nan, dtype=float)
+    amortissement_rate = np.full_like(theta, np.nan, dtype=float)
+
+    # Mode nul traite a part
+    phase_velocity_ratio[0] = 1.0 / np.sqrt(alpha)
+    amortissement_rate[0] = 0.0
+
+    # Modes non nuls
     nonzero = kappa > 0.0
     phase_velocity_ratio[nonzero] = omega_num[nonzero] / (params.c * kappa[nonzero])
+    amortissement_rate[nonzero] = -np.log(np.maximum(np.abs(g_phys[nonzero]), 1e-15)) / dt_eff
 
-    amortissement_rate = -np.log(np.maximum(np.abs(g_phys), 1e-15)) / dt_eff
     return {
         "physical_root": g_phys,
         "spectral_radius": rho,
@@ -147,17 +181,29 @@ def compute_numerical_response(
     }
 
 
-def compute_exact_continuous_response(theta: np.ndarray, params: WesterveltParams) -> dict[str, np.ndarray]:
-    """Reponse analytique de l'equation linearisee continue."""
+def compute_exact_continuous_response(
+    theta: np.ndarray,
+    params: WesterveltParams,
+    alpha: float = ALPHA_LINEARIZED,
+) -> dict[str, np.ndarray]:
+    """
+    Reponse analytique de l'equation continue linearisee gelee :
+        alpha * u_tt - c^2 u_xx - b u_xxt = 0
+    """
     kappa = theta / params.dx
-    disc = 4.0 * (params.c**2) * (kappa**2) - (params.b**2) * (kappa**4)
-    omega = 0.5 * (np.emath.sqrt(disc) - 1j * params.b * (kappa**2))
+    disc = 4.0 * alpha * (params.c**2) * (kappa**2) - (params.b**2) * (kappa**4)
+    omega = 0.5 / alpha * (np.emath.sqrt(disc) - 1j * params.b * (kappa**2))
 
-    phase_velocity_ratio = np.ones_like(theta)
+    phase_velocity_ratio = np.full_like(theta, np.nan, dtype=float)
+    amortissement_rate = np.full_like(theta, np.nan, dtype=float)
+
+    phase_velocity_ratio[0] = 1.0 / np.sqrt(alpha)
+    amortissement_rate[0] = 0.0
+
     nonzero = kappa > 0.0
     phase_velocity_ratio[nonzero] = np.real(omega[nonzero]) / (params.c * kappa[nonzero])
+    amortissement_rate[nonzero] = -np.imag(omega[nonzero])
 
-    amortissement_rate = -np.imag(omega)
     return {
         "omega": omega,
         "phase_velocity_ratio": phase_velocity_ratio,
@@ -185,18 +231,9 @@ def build_reference_params() -> WesterveltParams:
         dt=1.67e-8,
         nx=200,
         nt=1,
-        scheme="explicit",
+        scheme="semi_implicit",
         bc="dirichlet",
     )
-
-
-def _effective_dt_and_b(params: WesterveltParams, cfl: float, D: float) -> tuple[float, float]:
-    """Convertit (CFL, nu) en (dt_effectif, b_effectif) pour les criteres theoriques."""
-    dt_eff = cfl * params.dx / params.c
-    if dt_eff <= 0.0:
-        raise ValueError("Le CFL doit etre strictement positif pour evaluer la stabilite.")
-    b_eff = D * params.dx**2 / dt_eff
-    return float(dt_eff), float(b_eff)
 
 
 def compute_case_stability_diagnostics(
@@ -204,21 +241,23 @@ def compute_case_stability_diagnostics(
     params: WesterveltParams,
     cfl: float,
     D: float,
+    alpha: float = ALPHA_LINEARIZED,
 ) -> dict[str, float | bool]:
-    """Calcule les nouveaux criteres et le diagnostic observe pour un cas Fourier."""
+    """Calcule les criteres semi-implicites et le diagnostic observe pour un cas Fourier."""
     dt_eff, b_eff = _effective_dt_and_b(params, cfl, D)
-    margin = explicit_stability_margin(dt_eff, params.dx, params.c, b_eff)
-    theoretical_stable = explicit_theoretical_stable(dt_eff, params.dx, params.c, b_eff)
+    margin = semi_implicit_stability_margin(dt_eff, params.dx, params.c, b_eff, alpha=alpha)
+    theoretical_stable = semi_implicit_theoretical_stable(dt_eff, params.dx, params.c, b_eff, alpha=alpha)
 
-    response = compute_numerical_response(theta, params, cfl, D)
-    rho_max = float(np.max(response["spectral_radius"]))
+    response = compute_numerical_response(theta, params, cfl, D, alpha=alpha)
+    rho_max = float(np.max(response["spectral_radius"][1:]))  # modes non nuls seulement
     observed_stable = bool(rho_max <= 1.0 + STABILITY_TOL)
 
     return {
         "cfl": float(cfl),
         "D": float(D),
+        "alpha": float(alpha),
         "stability_margin": float(margin),
-        "reduced_margin": float(1.0 - cfl**2 - 2.0 * D),
+        "reduced_margin": float(alpha - cfl**2 + 2.0 * D),
         "theoretical_stable": bool(theoretical_stable),
         "spectral_radius_max": rho_max,
         "observed_stable": observed_stable,
@@ -242,6 +281,7 @@ def plot_amplification_and_dispersion(
     theta: np.ndarray,
     params: WesterveltParams,
     cases: Iterable[FourierCurve],
+    alpha: float = ALPHA_LINEARIZED,
     show: bool = False,
     savefig: bool = True,
 ) -> tuple[plt.Figure, dict[str, Path]]:
@@ -251,8 +291,8 @@ def plot_amplification_and_dispersion(
     stability_summary = []
 
     for case in cases:
-        response = compute_numerical_response(theta, params, case.cfl, case.D)
-        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D)
+        response = compute_numerical_response(theta, params, case.cfl, case.D, alpha=alpha)
+        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D, alpha=alpha)
         stability_summary.append(diag)
         dt_eff, _ = _effective_dt_and_b(params, case.cfl, case.D)
 
@@ -268,7 +308,7 @@ def plot_amplification_and_dispersion(
             scheme=params.scheme,
             bc=params.bc,
         )
-        exact = compute_exact_continuous_response(theta, exact_params)
+        exact = compute_exact_continuous_response(theta, exact_params, alpha=alpha)
 
         status = "stable" if diag["theoretical_stable"] else "instable"
         label = f"{case.label} ({status} theo)"
@@ -280,19 +320,20 @@ def plot_amplification_and_dispersion(
 
     axs[0].axhline(1.0, color="black", linestyle=":", linewidth=1.0, label="|G| = 1")
     axs[0].set_ylabel("Module du facteur d'amplification")
-    axs[0].set_title("Schema explicite : amplification numerique")
+    axs[0].set_title("Schema semi-implicite : amplification numerique")
     axs[0].grid(True, alpha=0.3)
     axs[0].legend(loc="best")
 
-    axs[1].axhline(1.0, color="black", linestyle=":", linewidth=1.0, label="Dispersion nulle")
-    axs[1].set_xlabel(r"Nombre d'onde reduit $\theta = k\Delta x$")
+    axs[1].axhline(1.0 / np.sqrt(alpha), color="black", linestyle=":", linewidth=1.0, label="Reference basse frequence")
+    axs[1].set_xlabel(r"Nombre d'onde reduit $\theta = \kappa \Delta x$")
     axs[1].set_ylabel(r"Vitesse de phase numerique / $c$")
-    axs[1].set_title("Schema explicite : dispersion numerique")
+    axs[1].set_title("Schema semi-implicite : dispersion numerique")
     axs[1].grid(True, alpha=0.3)
     axs[1].legend(loc="best")
 
     metadata = {
-        "analysis": "Fourier explicite",
+        "analysis": "Fourier semi-implicite",
+        "alpha": alpha,
         "reference_c": params.c,
         "reference_dx": params.dx,
         "reference_dt": params.dt,
@@ -301,11 +342,11 @@ def plot_amplification_and_dispersion(
         "D_values": [case.D for case in cases],
         "stability_summary": stability_summary,
         "stability_criteria": ["stability_margin", "theoretical_stable", "spectral_radius_max"],
-        "note": "Les courbes pointillees montrent le module spectral et la dispersion exacte continue.",
+        "note": "Le mode nul est traite separement. Les courbes pointillees representent la reponse continue exacte gelee.",
     }
     paths = {}
     if savefig:
-        paths = _save_figure(fig, "analyse_fourier_explicite_amplification_dispersion", metadata)
+        paths = _save_figure(fig, "analyse_fourier_semi_implicite_amplification_dispersion", metadata)
 
     if show:
         plt.show()
@@ -319,6 +360,7 @@ def plot_amplification_vs_dispersion(
     theta: np.ndarray,
     params: WesterveltParams,
     cases: Iterable[FourierCurve],
+    alpha: float = ALPHA_LINEARIZED,
     show: bool = False,
     savefig: bool = True,
 ) -> tuple[plt.Figure, dict[str, Path]]:
@@ -328,8 +370,8 @@ def plot_amplification_vs_dispersion(
     stability_summary = []
 
     for case in cases:
-        response = compute_numerical_response(theta, params, case.cfl, case.D)
-        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D)
+        response = compute_numerical_response(theta, params, case.cfl, case.D, alpha=alpha)
+        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D, alpha=alpha)
         stability_summary.append(diag)
 
         x = response["phase_velocity_ratio"]
@@ -338,15 +380,16 @@ def plot_amplification_vs_dispersion(
         ax.plot(x, y, color=case.color, linewidth=2.0, label=f"{case.label} ({status} theo)")
         ax.scatter([x[0], x[-1]], [y[0], y[-1]], color=case.color, s=25)
 
-    ax.scatter([1.0], [1.0], color="black", marker="x", s=80, label="Reference ideale (1, 1)")
+    ax.scatter([1.0 / np.sqrt(alpha)], [1.0], color="black", marker="x", s=80, label="Reference ideale basse frequence")
     ax.set_xlabel(r"Vitesse de phase numerique / $c$")
     ax.set_ylabel(r"$|G|$")
-    ax.set_title("Amplification vs dispersion")
+    ax.set_title("Compromis amplification / dispersion")
     ax.grid(True, alpha=0.3)
     ax.legend(loc="best")
 
     metadata = {
         "analysis": "Amplification vs dispersion",
+        "alpha": alpha,
         "reference_c": params.c,
         "reference_dx": params.dx,
         "reference_dt": params.dt,
@@ -354,10 +397,11 @@ def plot_amplification_vs_dispersion(
         "cfl_values": [case.cfl for case in cases],
         "D_values": [case.D for case in cases],
         "stability_summary": stability_summary,
+        "note": "Le mode nul est traite separement.",
     }
     paths = {}
     if savefig:
-        paths = _save_figure(fig, "analyse_fourier_explicite_amplification_vs_dispersion", metadata)
+        paths = _save_figure(fig, "analyse_fourier_semi_implicite_amplification_vs_dispersion", metadata)
 
     if show:
         plt.show()
@@ -372,6 +416,7 @@ def plot_diffusion_effect(
     params: WesterveltParams,
     cfl: float,
     D_values: Iterable[float],
+    alpha: float = ALPHA_LINEARIZED,
     show: bool = False,
     savefig: bool = True,
 ) -> tuple[plt.Figure, dict[str, Path]]:
@@ -383,8 +428,8 @@ def plot_diffusion_effect(
 
     colors = plt.get_cmap("viridis")(np.linspace(0.1, 0.9, len(D_values)))
     for D, color in zip(D_values, colors):
-        response = compute_numerical_response(theta, params, cfl, D)
-        diag = compute_case_stability_diagnostics(theta, params, cfl, D)
+        response = compute_numerical_response(theta, params, cfl, D, alpha=alpha)
+        diag = compute_case_stability_diagnostics(theta, params, cfl, D, alpha=alpha)
         stability_summary.append(diag)
         dt_eff, _ = _effective_dt_and_b(params, cfl, D)
 
@@ -400,7 +445,7 @@ def plot_diffusion_effect(
             scheme=params.scheme,
             bc=params.bc,
         )
-        exact = compute_exact_continuous_response(theta, exact_params)
+        exact = compute_exact_continuous_response(theta, exact_params, alpha=alpha)
 
         state = "stable" if diag["theoretical_stable"] else "instable"
         label = rf"$D={D:.3f}$ ({state} theo)"
@@ -409,20 +454,21 @@ def plot_diffusion_effect(
         axs[1].plot(theta, exact["amortissement_rate"], color=color, linestyle="--", alpha=0.6, label=f"exact {label}")
 
     axs[0].axhline(1.0, color="black", linestyle=":", linewidth=1.0)
-    axs[0].set_xlabel(r"Nombre d'onde reduit $\theta = k\Delta x$")
+    axs[0].set_xlabel(r"Nombre d'onde reduit $\theta = \kappa \Delta x$")
     axs[0].set_ylabel(r"$|G|$")
     axs[0].set_title("Effet de la diffusion sur le module de G")
     axs[0].grid(True, alpha=0.3)
     axs[0].legend(loc="best")
 
-    axs[1].set_xlabel(r"Nombre d'onde reduit $\theta = k\Delta x$")
+    axs[1].set_xlabel(r"Nombre d'onde reduit $\theta = \kappa \Delta x$")
     axs[1].set_ylabel(r"Taux d'amortissement $\alpha$ (s$^{-1}$)")
-    axs[1].set_title("Diffusion: amortissement des hautes frequences")
+    axs[1].set_title("Diffusion : amortissement des hautes frequences")
     axs[1].grid(True, alpha=0.3)
     axs[1].legend(loc="best", fontsize=8)
 
     metadata = {
         "analysis": "Effet de la diffusion",
+        "alpha": alpha,
         "reference_c": params.c,
         "reference_dx": params.dx,
         "reference_dt": params.dt,
@@ -430,9 +476,10 @@ def plot_diffusion_effect(
         "cfl": cfl,
         "D_values": D_values,
         "stability_summary": stability_summary,
+        "note": "Le mode nul est traite separement.",
     }
     if savefig:
-        paths = _save_figure(fig, "analyse_fourier_explicite_effet_diffusion", metadata)
+        paths = _save_figure(fig, "analyse_fourier_semi_implicite_effet_diffusion", metadata)
 
     if show:
         plt.show()
@@ -442,14 +489,19 @@ def plot_diffusion_effect(
     return fig, paths
 
 
-def main(show: bool = False, savefig: bool = False) -> dict[str, dict[str, Path]]:
+def main(
+    show: bool = False,
+    savefig: bool = False,
+    alpha: float = ALPHA_LINEARIZED,
+) -> dict[str, dict[str, Path]]:
     """Point d'entree du script."""
     set_style()
     params = build_reference_params()
     theta = _theta_grid(600)
     cases = build_analysis_cases()
 
-    print("Analyse Fourier du schema explicite")
+    print("Analyse Fourier du schema semi-implicite")
+    print(f"  alpha (gel lineaire) = {alpha:.3f}")
     print(f"  c = {params.c:.3g} m/s")
     print(f"  dx = {params.dx:.3g} m")
     print(f"  dt = {params.dt:.3g} s")
@@ -457,9 +509,20 @@ def main(show: bool = False, savefig: bool = False) -> dict[str, dict[str, Path]
     print(f"  CFL de reference = {cases[0].cfl:.3f}")
     print(f"  Cas de diffusion = {[case.D for case in cases]}")
 
-    print("Nouveaux criteres de stabilite (schema explicite):")
+    zero_mode_info = analyze_zero_mode(
+        dt=_effective_dt_and_b(params, cases[0].cfl, cases[0].D)[0],
+        alpha=alpha,
+    )
+
+    print("Mode nul (mu = 0) :")
+    print(f"  tau = {zero_mode_info['tau']:.3e}")
+    print(f"  rho(A(0)) = {zero_mode_info['spectral_radius']:.3f}")
+    print(f"  diagonalisable = {zero_mode_info['diagonalisable']}")
+    print(f"  commentaire : {zero_mode_info['comment']}")
+
+    print("Criteres de stabilite (modes non nuls) :")
     for case in cases:
-        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D)
+        diag = compute_case_stability_diagnostics(theta, params, case.cfl, case.D, alpha=alpha)
         print(
             "  "
             f"{case.label}: margin={diag['stability_margin']:.3e}, "
@@ -468,13 +531,14 @@ def main(show: bool = False, savefig: bool = False) -> dict[str, dict[str, Path]
             f"observed_stable={diag['observed_stable']}"
         )
 
-    _, paths1 = plot_amplification_and_dispersion(theta, params, cases, show=show, savefig=savefig)
-    _, paths2 = plot_amplification_vs_dispersion(theta, params, cases, show=show, savefig=savefig)
+    _, paths1 = plot_amplification_and_dispersion(theta, params, cases, alpha=alpha, show=show, savefig=savefig)
+    _, paths2 = plot_amplification_vs_dispersion(theta, params, cases, alpha=alpha, show=show, savefig=savefig)
     _, paths3 = plot_diffusion_effect(
         theta,
         params,
         cfl=cases[0].cfl,
         D_values=[0.0, 0.02, 0.05],
+        alpha=alpha,
         show=show,
         savefig=savefig,
     )
@@ -499,4 +563,3 @@ def main(show: bool = False, savefig: bool = False) -> dict[str, dict[str, Path]
 
 if __name__ == "__main__":
     main(show=True, savefig=False)
-

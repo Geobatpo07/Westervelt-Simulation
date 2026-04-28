@@ -14,10 +14,11 @@ Contient:
 from pathlib import Path
 from datetime import datetime
 import json
+import re
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from typing import Dict, List, Tuple, Any, Callable, Optional
+from typing import Dict, List, Tuple, Any, Callable, Optional, Literal
 
 
 # =============================================================================
@@ -57,13 +58,25 @@ def get_next_version(filepath: Path) -> int:
     parent = filepath.parent
     
     existing_versions = []
+
+    def _extract_version(path_obj: Path) -> Optional[int]:
+        # Accepte: <stem>_v3.ext et <stem>_v3_metadata.json
+        match = re.search(r"_v(\d+)(?:_metadata)?$", path_obj.stem)
+        if not match:
+            return None
+        return int(match.group(1))
+
     for f in parent.glob(f"{stem}_v*{suffix}"):
-        try:
-            version_str = f.stem.split("_v")[-1]
-            version = int(version_str)
+        version = _extract_version(f)
+        if version is not None:
             existing_versions.append(version)
-        except (ValueError, IndexError):
-            pass
+
+    # Fallback robuste: si on passe un suffixe temporaire (.tmp), scanner tous les formats.
+    if not existing_versions:
+        for f in parent.glob(f"{stem}_v*.*"):
+            version = _extract_version(f)
+            if version is not None:
+                existing_versions.append(version)
     
     return max(existing_versions) + 1 if existing_versions else 1
 
@@ -101,7 +114,7 @@ def save_figure_with_version(
         >>> paths = save_figure_with_version(
         ...     fig, 
         ...     "my_plot", 
-        ...     metadata={"model": "westervelt", "scheme": "semi-implicit"}
+        ...     metadata={"model": "Westervelt", "scheme": "semi-implicit"}
         ... )
     """
     if formats is None:
@@ -208,6 +221,24 @@ def save_data_with_version(
 # Gestion des Grilles de Scans (Analyse de Stabilité)
 # =============================================================================
 
+def _get_scan_amplitude(result: Dict) -> float | None:
+    """
+    Extrait l'amplitude d'un résultat de scan.
+
+    Le format recommandé est la clé "amplitude".
+    La clé "amplitude_u0" est acceptée pour compatibilité avec les anciens résultats.
+    """
+    amplitude = result.get("amplitude")
+
+    if amplitude is None:
+        amplitude = result.get("amplitude_u0")
+
+    if amplitude is None:
+        return None
+
+    return float(amplitude)
+
+
 def build_scan_grid(
     results: List[Dict],
     dt_vals: List[float],
@@ -244,10 +275,17 @@ def build_scan_grid(
     amp_index = {value: idx for idx, value in enumerate(amp_vals)}
     
     for result in results:
-        dt = float(result.get("dt"))
-        amp = float(result.get("amplitude"))
+        dt_raw = float(result.get("dt"))
+        amp = _get_scan_amplitude(result)
+
+        if dt_raw is None or amp is None:
+            continue
+
+        dt = float(dt_raw)
+
         i = amp_index.get(amp)
         j = dt_index.get(dt)
+
         if i is not None and j is not None:
             grid[i, j] = float(extractor(result))
     
@@ -273,8 +311,8 @@ def get_scan_axes(results: List[Dict]) -> Tuple[List[float], List[float]]:
         ... ]
         >>> dt_vals, amp_vals = get_scan_axes(results)
     """
-    dt_vals = sorted({float(r["dt"]) for r in results if "dt" in r})
-    amp_vals = sorted({float(r["amplitude"]) for r in results if "amplitude" in r})
+    dt_vals = sorted({float(r["dt"]) for r in results if r.get("dt") is not None})
+    amp_vals = sorted({float(r["amplitude"]) for r in results if _get_scan_amplitude(r) is not None})
     
     return dt_vals, amp_vals
 
@@ -312,6 +350,7 @@ def compute_stable_ratio(results: List[Dict]) -> float:
 def compute_error_metrics(
     solution: np.ndarray,
     reference: np.ndarray,
+    dx: float = 1.0,
     compute_l2: bool = True,
     compute_linf: bool = True,
     compute_rmse: bool = True
@@ -322,6 +361,7 @@ def compute_error_metrics(
     Args:
         solution: Solution numérique
         reference: Solution de référence
+        dx: le pas spatial pour la normalisation de L2
         compute_l2: Calculer l'erreur L2
         compute_linf: Calculer l'erreur L∞
         compute_rmse: Calculer la RMSE
@@ -329,36 +369,67 @@ def compute_error_metrics(
     Returns:
         Dict[str, float]: Dictionnaire des métriques d'erreur
     """
-    metrics = {}
+
+    if solution.shape != reference.shape:
+        raise ValueError("solution and reference must have the same shape")
+
+    metrics: Dict[str, float] = {}
     diff = solution - reference
-    
+
     if compute_l2:
-        metrics["L2"] = np.sqrt(np.mean(diff**2))
+        metrics["L2"] = float(np.sqrt(dx * np.sum(diff**2)))
+
     if compute_linf:
-        metrics["Linf"] = np.max(np.abs(diff))
+        metrics["Linf"] = float(np.max(np.abs(diff)))
+
     if compute_rmse:
-        metrics["RMSE"] = np.sqrt(np.mean(diff**2))
-    
+        metrics["RMSE"] = float(np.sqrt(np.mean(diff**2)))
+
     return metrics
 
 
-def normalize_array(arr: np.ndarray, mode: str = "minmax") -> np.ndarray:
+def normalize_array(arr: np.ndarray, mode: Literal["minmax", "zscore", "robust"] = "minmax") -> np.ndarray:
     """
     Normalise un array NumPy.
     
     Args:
         arr: Array à normaliser
-        mode: 'minmax' [0,1] ou 'zscore' (moyenne 0, std 1)
+        mode: 'minmax' [0,1] ou 'zscore' (moyenne 0, std 1) ou 'robust' (Q1-Q3)
         
     Returns:
         np.ndarray: Array normalisé
     """
+    arr = np.asarray(arr, dtype=float)
+
     if mode == "minmax":
-        return (arr - np.min(arr)) / (np.max(arr) - np.min(arr) + 1e-10)
+        vmin = np.min(arr)
+        vmax = np.max(arr)
+
+        if vmax == vmin:
+            return np.zeros_like(arr)
+
+        return (arr - vmin) / (vmax - vmin)
+
     elif mode == "zscore":
-        return (arr - np.mean(arr)) / (np.std(arr) + 1e-10)
+        mean = np.mean(arr)
+        std = np.std(arr)
+
+        if std == 0:
+            return np.zeros_like(arr)
+
+        return (arr - mean) / std
+
+    elif mode == "robust":
+        q1, q3 = np.percentile(arr, [25, 75])
+        iqr = q3 - q1
+
+        if iqr == 0:
+            return np.zeros_like(arr)
+
+        return (arr - q1) / iqr
+
     else:
-        raise ValueError(f"Mode de normalisation inconnu: {mode}")
+        raise ValueError(f"Mode inconnu: {mode}")
 
 
 # =============================================================================

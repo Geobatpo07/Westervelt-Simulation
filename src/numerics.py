@@ -33,7 +33,8 @@ def _time_derivative(u, u_prev, dt):
 
 
 def _safe_denominator(denom, eps=1e-12):
-    """Régularisation purement numérique pour éviter une division machine par 0.
+    """
+    Régularisation purement numérique pour éviter une division machine par 0.
     Ne remplace pas un test de non-dégénérescence mathématique.
     """
     safe = denom.copy()
@@ -70,13 +71,13 @@ def _apply_boundary(u, bc_type):
         raise ValueError("bc_type doit valoir 0 (Dirichlet) ou 1 (Neumann).")
 
 
-def update_F(F_n, u_n, u_prev, dt, dx, c, k, bc_type):
-    """Mise à jour: F^{n+1} = F^n + dt(c^2 Δu^n + 2k(D_t^-u^n)^2)."""
-    dx2 = dx * dx
-    c2 = c * c
+def update_F(F_n, u_n, dt, dx, c, bc_type):
+    """Mise à jour: F^{n+1} = F^n + dt c^2 Δu^n."""
+    F_next = np.zeros_like(F_n)
+    dx2 = dx ** 2
+    c2 = c ** 2
     lap_u = _laplacian_all(u_n, dx2)
-    ut = _time_derivative(u_n, u_prev, dt)
-    F_next = F_n + dt * (c2 * lap_u + 2.0 * k * ut ** 2)
+    F_next = F_n + dt * c2 * lap_u
     _apply_boundary(F_next, bc_type)
     return F_next
 
@@ -92,14 +93,12 @@ def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
     if n_int <= 0:
         raise ValueError("nx doit être >= 3 pour le schéma semi-implicite.")
 
-    lower = np.zeros(n_int - 1, dtype=u_n.dtype)
     diag = np.zeros(n_int, dtype=u_n.dtype)
-    upper = np.zeros(n_int - 1, dtype=u_n.dtype)
     rhs = rhs_full[1:-1].copy()
-    lam_int = lam_full[1:-1].copy
+    lam_int = lam_full[1:-1].copy()
 
-    lower = lam_int[1:].copy()
-    upper = lam_int[:-1].copy()
+    lower = - lam_int[1:].copy()
+    upper = - lam_int[:-1].copy()
 
     if bc_type == 0: # Dirichlet
         diag = 1.0 + 2.0 * lam_int
