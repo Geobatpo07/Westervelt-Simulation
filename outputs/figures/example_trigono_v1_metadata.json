@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-03-31T16:58:03.617117",
+  "version": 1,
+  "type": "example",
+  "functions": "sin, cos",
+  "domain": "[0, 10]"
+}

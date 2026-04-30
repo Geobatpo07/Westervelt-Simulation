@@ -1,0 +1,222 @@
+{
+  "explicit": [
+    {
+      "dt": 1e-08,
+      "amplitude": 0.5,
+      "stable": true,
+      "max_abs_u": 0.49735958069067027,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999978677784,
+      "nondegenerate": true,
+      "stability_margin": 5.589998799999999e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1e-08,
+      "amplitude": 1.0,
+      "stable": true,
+      "max_abs_u": 0.9947191613711918,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999957355568,
+      "nondegenerate": true,
+      "stability_margin": 5.589998799999999e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1e-08,
+      "amplitude": 1.5,
+      "stable": true,
+      "max_abs_u": 1.4920787420415644,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999936033351,
+      "nondegenerate": true,
+      "stability_margin": 5.589998799999999e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 0.5,
+      "stable": true,
+      "max_abs_u": 0.4943847581458107,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999978677784,
+      "nondegenerate": true,
+      "stability_margin": 2.7774982000000013e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 1.0,
+      "stable": true,
+      "max_abs_u": 0.9887695162687866,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999957355568,
+      "nondegenerate": true,
+      "stability_margin": 2.7774982000000013e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 1.5,
+      "stable": true,
+      "max_abs_u": 1.4831542743689279,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999936033351,
+      "nondegenerate": true,
+      "stability_margin": 2.7774982000000013e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 0.5,
+      "stable": false,
+      "max_abs_u": 110831.17879059286,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9997729967538533,
+      "nondegenerate": true,
+      "stability_margin": -1.1600024000000015e-10,
+      "theoretical_stable": false
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 1.0,
+      "stable": false,
+      "max_abs_u": 106406.06903392577,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9997843140082583,
+      "nondegenerate": true,
+      "stability_margin": -1.1600024000000015e-10,
+      "theoretical_stable": false
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 1.5,
+      "stable": false,
+      "max_abs_u": 159606.66680738324,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9996764732164115,
+      "nondegenerate": true,
+      "stability_margin": -1.1600024000000015e-10,
+      "theoretical_stable": false
+    }
+  ],
+  "semi_implicit": [
+    {
+      "dt": 1e-08,
+      "amplitude": 0.5,
+      "stable": true,
+      "max_abs_u": 0.49735942969802377,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999978677784,
+      "nondegenerate": true,
+      "stability_margin": 5.5900012e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1e-08,
+      "amplitude": 1.0,
+      "stable": true,
+      "max_abs_u": 0.9947188593858981,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999957355568,
+      "nondegenerate": true,
+      "stability_margin": 5.5900012e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1e-08,
+      "amplitude": 1.5,
+      "stable": true,
+      "max_abs_u": 1.492078289063623,
+      "cfl": 0.5357142857142857,
+      "lambda_legacy": 28698979.591836736,
+      "min_denom": 0.9999999936033351,
+      "nondegenerate": true,
+      "stability_margin": 5.5900012e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 0.5,
+      "stable": true,
+      "max_abs_u": 0.4943845330059585,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999978677784,
+      "nondegenerate": true,
+      "stability_margin": 2.777501800000001e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 1.0,
+      "stable": true,
+      "max_abs_u": 0.9887690659890815,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999957355568,
+      "nondegenerate": true,
+      "stability_margin": 2.777501800000001e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 1.5e-08,
+      "amplitude": 1.5,
+      "stable": true,
+      "max_abs_u": 1.483153598949369,
+      "cfl": 0.8035714285714285,
+      "lambda_legacy": 43048469.387755096,
+      "min_denom": 0.9999999936033351,
+      "nondegenerate": true,
+      "stability_margin": 2.777501800000001e-10,
+      "theoretical_stable": true
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 0.5,
+      "stable": false,
+      "max_abs_u": 110827.60581282254,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9997730039394627,
+      "nondegenerate": true,
+      "stability_margin": -1.1599976000000008e-10,
+      "theoretical_stable": false
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 1.0,
+      "stable": false,
+      "max_abs_u": 106402.76681781496,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9997843206283363,
+      "nondegenerate": true,
+      "stability_margin": -1.1599976000000008e-10,
+      "theoretical_stable": false
+    },
+    {
+      "dt": 2e-08,
+      "amplitude": 1.5,
+      "stable": false,
+      "max_abs_u": 159601.6485228292,
+      "cfl": 1.0714285714285714,
+      "lambda_legacy": 57397959.18367347,
+      "min_denom": 0.9996764832430679,
+      "nondegenerate": true,
+      "stability_margin": -1.1599976000000008e-10,
+      "theoretical_stable": false
+    }
+  ]
+}
