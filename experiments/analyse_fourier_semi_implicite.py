@@ -9,7 +9,7 @@ On considere un mode de Fourier de la forme :
 ou theta = kappa * dx est le nombre d'onde reduit.
 
 Pour le schema semi-implicite (gel de alpha), on utilise directement la
-matrice d'amplification deja implementee dans src.stability_analysis.
+matrice d'amplification deja implementee dans core.stability_analysis.
 
 Le script s'appuie sur la matrice d'amplification pour :
     - calculer le rayon spectral (critere de stabilite),
@@ -51,8 +51,8 @@ FOURIER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "analysis" / "semi-implicit-four
 ALPHA_LINEARIZED = 0.1
 STABILITY_TOL = 1e-10
 
-from src.solver import WesterveltParams
-from src.stability_analysis import (
+from core.solver import WesterveltParams
+from core.stability_analysis import (
     amplification_matrix_semi_implicite,
     discrete_mu,
     semi_implicit_stability_margin,

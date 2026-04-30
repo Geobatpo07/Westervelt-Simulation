@@ -65,7 +65,7 @@ python experiments/analyse_fourier_explicite.py
 ## Utilisation rapide
 
 ```python
-from src.solver import WesterveltSolver, WesterveltParams
+from core.solver import WesterveltSolver, WesterveltParams
 
 params = WesterveltParams(
     c=1500,

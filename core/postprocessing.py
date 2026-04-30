@@ -1,8 +1,8 @@
-# src/postprocessing.py
+# core/postprocessing.py
 
 import numpy as np
 import matplotlib.pyplot as plt
-from src.solver import WesterveltSolver
+from core.solver import WesterveltSolver
 from utils import build_scan_grid, get_scan_axes
 
 

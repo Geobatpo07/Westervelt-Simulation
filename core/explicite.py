@@ -1,6 +1,6 @@
-# src/explicite.py
+# core/explicite.py
 
-from src.numerics import _apply_boundary, _laplacian_all, _safe_denominator, update_F
+from core.numerics import _apply_boundary, _laplacian_all, _safe_denominator, update_F
 
 
 def step_explicit(u, F, c, b, k, dt, dx, bc_type):

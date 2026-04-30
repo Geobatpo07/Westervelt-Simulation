@@ -1,7 +1,7 @@
-# src/semi_implicite.py
+# core/semi_implicite.py
 
 import numpy as np
-from src.numerics import (
+from core.numerics import (
     _apply_boundary,
     assemble_semi_implicit_system,
     solve_tridiagonal,

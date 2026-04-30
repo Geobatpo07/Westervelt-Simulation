@@ -15,8 +15,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.solver import WesterveltParams, WesterveltSolver
-from src.stability_analysis import (
+from core.solver import WesterveltParams, WesterveltSolver
+from core.stability_analysis import (
     explicit_stability_margin,
     explicit_theoretical_stable,
     scan_spectral_radius_explicit,
@@ -56,6 +56,8 @@ def _run_solver_scheme(params: WesterveltParams, u0_type: str = "gaussian", ampl
         "x": solver.x.copy(),
         "u": solver.u.copy(),
         "energy": np.array(solver.energy_history, dtype=float),
+        "amplitude_u0": float(amplitude),
+        "amplitude_u1": float(velocity_amplitude),
         "stable_ratio": None,
     }
 
@@ -70,12 +72,19 @@ def _plot_final_solutions(solution_by_scheme: dict, output_dir: str, metadata: d
     ax.grid(True, alpha=0.3)
     ax.legend()
 
+    # Enrichir les métadonnées avec les amplitudes initiales si disponibles
+    md = dict(metadata)
+    for scheme, data in solution_by_scheme.items():
+        if isinstance(data, dict):
+            md[f"amplitude_u0_{scheme}"] = float(data.get("amplitude_u0", np.nan))
+            md[f"amplitude_u1_{scheme}"] = float(data.get("amplitude_u1", np.nan))
+
     save_figure_with_version(
         fig,
         filename="final_solutions_all_schemes",
         output_dir=output_dir,
         tight_layout=False,
-        metadata=metadata,
+        metadata=md,
     )
     plt.close(fig)
 
@@ -134,12 +143,18 @@ def _plot_theory_vs_observed(results, scheme: str, output_dir: str, metadata: di
     axs["diff"].set_ylabel("Amplitude")
     plt.colorbar(im_d, ax=axs["diff"], label="diff")
 
+    # Ajouter amplitude de vitesse si presente dans les resultats
+    md = dict(metadata)
+    if isinstance(results, (list, tuple)) and len(results) > 0 and isinstance(results[0], dict):
+        md["amplitude_u1"] = float(results[0].get("amplitude_u1", np.nan))
+        md["u1_type"] = results[0].get("u1_type", None)
+
     save_figure_with_version(
         fig,
         filename=f"theory_vs_observed_{scheme}",
         output_dir=output_dir,
         tight_layout=False,
-        metadata=metadata,
+        metadata=md,
     )
     plt.close(fig)
 
@@ -193,12 +208,20 @@ def _plot_scheme_stability_comparison(results_map: dict, output_dir: str, metada
     axs["diff"].set_ylabel("Amplitude")
     plt.colorbar(imd, ax=axs["diff"], label="diff")
 
+    md = dict(metadata)
+    # tenter d'extraire amplitude_u1 des resultats explicite/semi
+    if isinstance(results_map, dict):
+        for key in ("explicit", "semi_implicit"):
+            lst = results_map.get(key)
+            if isinstance(lst, (list, tuple)) and len(lst) > 0 and isinstance(lst[0], dict):
+                md[f"amplitude_u1_{key}"] = float(lst[0].get("amplitude_u1", np.nan))
+
     save_figure_with_version(
         fig,
         filename="observed_stability_comparison_schemes",
         output_dir=output_dir,
         tight_layout=False,
-        metadata=metadata,
+        metadata=md,
     )
     plt.close(fig)
 

@@ -12,8 +12,8 @@ Parties:
 
 import pandas as pd
 
-from src.solver import WesterveltSolver, WesterveltParams
-from src.postprocessing import (
+from core.solver import WesterveltSolver, WesterveltParams
+from core.postprocessing import (
     plot_stability_detailed,
     plot_snapshots_energy_comparison,
     plot_scheme_comparison,

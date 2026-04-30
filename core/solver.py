@@ -1,11 +1,12 @@
-# src/solver.py
+# core/solver.py
 
 import numpy as np
 import matplotlib.pyplot as plt
 from dataclasses import dataclass, field
-from src.explicite import step_explicit
-from src.semi_implicite import step_semi_implicit
-from src.numerics import _apply_boundary, _laplacian_all, compute_energy
+from core.explicite import step_explicit
+from core.semi_implicite import step_semi_implicit
+from core.numerics import _apply_boundary, _laplacian_all, compute_energy
+from utils.utils import timer, profile
 
 
 @dataclass
@@ -57,6 +58,10 @@ class WesterveltParams:
         self.scheme = self.scheme.lower()
         if self.scheme not in ("explicit", "semi_implicit"):
             raise ValueError("scheme doit valoir 'explicit' ou 'semi_implicit'.")
+
+        self.bc = self.bc.lower()
+        if self.bc not in ("dirichlet", "neumann"):
+            raise ValueError("bc doit valoir 'dirichlet' ou 'neumann'.")
 
 
 class WesterveltSolver:
@@ -124,6 +129,7 @@ class WesterveltSolver:
         else:
             print("Schéma inconnu pour l'analyse de stabilité.")
 
+
     def reset_auxiliary_field(self, u_t0=None):
         """
         Recalcule F à partir de u et d'une vitesse initiale u_t0.
@@ -166,6 +172,7 @@ class WesterveltSolver:
             raise ValueError(f"Profil initial non reconnu : {profile_type}")
 
         return amplitude * profile
+
 
     def initialize(self, u0_type="gaussian", u1_type="zero", A1=1.0, A2=0.0, mu=None, sigma1=None, sigma2=None):
         """Initialise u^0 = u0 et u_t^0 = u1."""
@@ -239,6 +246,7 @@ class WesterveltSolver:
         self.u = self.u_next.copy()
 
 
+    @profile
     def run(self, store_energy=True):
         """Fait tourner la simulation pour le nombre de pas de temps spécifié dans les paramètres.
         Si store_energy=True, stocke l'énergie à chaque pas de temps dans self.energy_history."""
@@ -262,6 +270,7 @@ class WesterveltSolver:
         plt.show()
 
 
+    @profile
     def run_with_snapshots(self, times_to_save, store_energy=True):
         """Fait tourner la simulation et sauvegarde des snapshots de u à des temps spécifiés dans times_to_save (en secondes).
          Renvoie un dictionnaire {t: u_snapshot} pour les temps demandés. Si store_energy=True, stocke aussi l'énergie à chaque pas de temps dans self.energy_history."""
@@ -291,6 +300,8 @@ class WesterveltSolver:
 
         return snapshots
 
+
+    @timer
     def run_stability_scan(
             self,
             dt_values,
@@ -372,6 +383,7 @@ class WesterveltSolver:
                 results.append(
                     {
                         "dt": float(dt),
+                        "amplitude": float(amp),
                         "amplitude_u0": float(amp),
                         "amplitude_u1": float(velocity_amplitude),
 
@@ -407,6 +419,7 @@ class WesterveltSolver:
         plt.grid(True)
         plt.show()
 
+
     def plot_energy(self):
         if not self.energy_history:
             print("Aucune energie stockee. Lancez run(..., store_energy=True).")
@@ -420,3 +433,29 @@ class WesterveltSolver:
         plt.title("Evolution de l'energie")
         plt.grid(True)
         plt.show()
+
+
+    def print_profiler_summary(self):
+        """Affiche un résumé des temps et pics mémoire mesurés."""
+
+        if not hasattr(self, "profiler") or not self.profiler:
+            print("Aucune donnée de profiling disponible.")
+            return
+
+        print("\nRésumé du profiling")
+        print("-" * 60)
+
+        for func_name, records in self.profiler.items():
+            durations = records["durations"]
+            memories = records["peak_memory_mb"]
+
+            n_calls = len(durations)
+
+            print(f"{func_name}")
+            print(f"  appels          : {n_calls}")
+            print(f"  temps total     : {sum(durations):.4f} s")
+            print(f"  temps moyen     : {sum(durations) / len(durations):.4f} s")
+            print(f"  temps max       : {max(durations):.4f} s")
+            print(f"  mémoire max     : {max(memories):.4f} MB")
+            print()
+

@@ -56,8 +56,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 FOURIER_OUTPUT_DIR = PROJECT_ROOT / "outputs" / "analysis" / "explicit-fourier-analysis"
 
-from src.solver import WesterveltParams
-from src.stability_analysis import (
+from core.solver import WesterveltParams
+from core.stability_analysis import (
     amplification_matrix_explicite,
     discrete_mu,
     explicit_stability_margin,

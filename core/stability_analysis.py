@@ -1,4 +1,4 @@
-# /src/stability_analysis.py
+# /core/stability_analysis.py
 
 import numpy as np
 

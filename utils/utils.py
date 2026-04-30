@@ -10,15 +10,134 @@ Contient:
 - Validation numérique et stabilité
 - Analyse des schémas numériques
 """
-
+import tracemalloc
 from pathlib import Path
 from datetime import datetime
 import json
 import re
+import warnings
+from unittest import result
+
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Callable, Optional, Literal
+import time
+import functools
+
+
+# =============================================================================
+# Décorateurs
+# =============================================================================
+
+def timer(func: Callable) -> Callable:
+    """
+    Décorateur qui mesure et affiche le temps d'exécution d'une fonction.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            duration = time.perf_counter() - start_time
+            print(f"[{func.__name__}] Exécuté en {duration:.4f} secondes")
+    return wrapper
+
+
+def log_execution(func: Callable) -> Callable:
+    """
+    Décorateur qui logue l'appel de la fonction avec ses arguments.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # On évite de logger de gros arrays numpy
+        def _repr_short(x):
+            if isinstance(x, np.ndarray):
+                return f"ndarray(shape={x.shape}, dtype={x.dtype})"
+            return repr(x)
+
+        args_repr = [_repr_short(a) for a in args]
+        kwargs_repr = [f"{k}={_repr_short(v)}" for k, v in kwargs.items()]
+        signature = ", ".join(args_repr + kwargs_repr)
+        print(f"Appel de {func.__name__}({signature})")
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def deprecated(reason: str) -> Callable:
+    """
+    Décorateur pour marquer les fonctions comme obsolètes.
+    """
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            warnings.warn(
+                f"{func.__name__} est obsolète : {reason}",
+                category=DeprecationWarning,
+                stacklevel=2
+            )
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def validate_shape(func: Callable) -> Callable:
+    """
+    Décorateur pour valider que les arguments numpy ont des formes compatibles.
+    Vérifie que tous les arrays ont la même forme ou sont scalaires.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        array_shapes = [arg.shape for arg in args if isinstance(arg, np.ndarray)]
+        if array_shapes:
+            first_shape = array_shapes[0]
+            for shape in array_shapes[1:]:
+                if shape != first_shape:
+                    raise ValueError(f"Tous les arrays doivent avoir la même forme. Formes trouvées: {array_shapes}")
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def profile(func: Callable) -> Callable:
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        self_obj = args[0] if len(args) > 0 else None
+
+        tracemalloc.start()
+        start_time = time.perf_counter()
+
+        try:
+            result = func(*args, **kwargs)
+        finally:
+            duration = time.perf_counter() - start_time
+            _, peak_memory = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+
+            peak_memory_mb = peak_memory / (1024 ** 2)
+
+            print(
+                f"[PROFILE] {func.__name__} | "
+                f"temps: {duration:.4f}s | "
+                f"pic mémoire: {peak_memory_mb:.2f} MB"
+            )
+
+            if self_obj is not None:
+                if not hasattr(self_obj, "profiler"):
+                    self_obj.profiler = {}
+
+                if func.__name__ not in self_obj.profiler:
+                    self_obj.profiler[func.__name__] = {
+                        "durations": [],
+                        "peak_memory_mb": []
+                    }
+
+                self_obj.profiler[func.__name__]["durations"].append(duration)
+                self_obj.profiler[func.__name__]["peak_memory_mb"].append(peak_memory_mb)
+
+        return result
+
+    return wrapper
 
 
 # =============================================================================
@@ -275,7 +394,7 @@ def build_scan_grid(
     amp_index = {value: idx for idx, value in enumerate(amp_vals)}
     
     for result in results:
-        dt_raw = float(result.get("dt"))
+        dt_raw = result.get("dt")
         amp = _get_scan_amplitude(result)
 
         if dt_raw is None or amp is None:
@@ -312,7 +431,7 @@ def get_scan_axes(results: List[Dict]) -> Tuple[List[float], List[float]]:
         >>> dt_vals, amp_vals = get_scan_axes(results)
     """
     dt_vals = sorted({float(r["dt"]) for r in results if r.get("dt") is not None})
-    amp_vals = sorted({float(r["amplitude"]) for r in results if _get_scan_amplitude(r) is not None})
+    amp_vals = sorted({amp for r in results if (amp := _get_scan_amplitude(r)) is not None})
     
     return dt_vals, amp_vals
 
@@ -347,13 +466,34 @@ def compute_stable_ratio(results: List[Dict]) -> float:
 # Utilitaires Mathématiques et Statistiques
 # =============================================================================
 
+def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray:
+    """Générique pour calculer le gradient."""
+    if bc_type == "dirichlet":
+        # gradient centré (points intérieurs)
+        return (diff[2:] - diff[:-2]) / (2 * dx)
+
+    elif bc_type == "neumann":
+        gradient = np.zeros_like(diff)
+        # Bord gauche (forward difference)
+        gradient[1:-1] = (diff[2:] - diff[:-2]) / (2 * dx)
+        # bords
+        gradient[0] = (diff[1] - diff[0]) / dx
+        gradient[-1] = (diff[-1] - diff[-2]) / dx
+        return gradient
+
+    elif bc_type == "periodic":
+        return (np.roll(diff, -1) - np.roll(diff, 1)) / (2 * dx)
+
+
 def compute_error_metrics(
     solution: np.ndarray,
     reference: np.ndarray,
     dx: float = 1.0,
     compute_l2: bool = True,
+    compute_h1: bool = True,
     compute_linf: bool = True,
-    compute_rmse: bool = True
+    compute_rmse: bool = True,
+    bc_type: str = "dirichlet"
 ) -> Dict[str, float]:
     """
     Calcule les métriques d'erreur entre deux solutions.
@@ -361,31 +501,121 @@ def compute_error_metrics(
     Args:
         solution: Solution numérique
         reference: Solution de référence
-        dx: le pas spatial pour la normalisation de L2
+        dx: le pas spatial pour la normalisation
         compute_l2: Calculer l'erreur L2
+        compute_h1: Calculer l'erreur H1
         compute_linf: Calculer l'erreur L∞
         compute_rmse: Calculer la RMSE
+        bc_type: conditions aux bords
         
     Returns:
         Dict[str, float]: Dictionnaire des métriques d'erreur
     """
 
     if solution.shape != reference.shape:
-        raise ValueError("solution and reference must have the same shape")
+        raise ValueError("solution and reference doivent être de mêmes dimensions.")
+
+    if bc_type not in ["dirichlet", "neumann", "periodic"]:
+        raise ValueError("bc_type doit être 'dirichlet', 'neumann', ou 'periodic'")
 
     metrics: Dict[str, float] = {}
     diff = solution - reference
+    l2_squared = dx * np.sum(diff**2)
 
+    # Metrique de l'erreur L2
     if compute_l2:
-        metrics["L2"] = float(np.sqrt(dx * np.sum(diff**2)))
-
-    if compute_linf:
+        metrics["L2"] = float(np.sqrt(l2_squared))
+    # Metrique de l'erreur H1
+    elif compute_h1:
+        gradient_diff = compute_gradient(diff, dx, bc_type=bc_type)
+        gradient_squared = dx * np.sum(gradient_diff**2)
+        metrics["H1"] = float(np.sqrt(l2_squared + gradient_squared))
+    # Metrique Linf
+    elif compute_linf:
         metrics["Linf"] = float(np.max(np.abs(diff)))
-
-    if compute_rmse:
+    # Metrque RMSE
+    elif compute_rmse:
         metrics["RMSE"] = float(np.sqrt(np.mean(diff**2)))
 
     return metrics
+
+
+def compute_linf_time_error(
+        solution_time: np.ndarray,
+        reference_time: np.ndarray,
+        dx: float = 1.0,
+        norm_type: str = "L2",
+        bc_type: str = "dirichlet"
+) -> float:
+    """
+    Calcule max_n ||solution_time[n] - reference_time[n]||_X.
+
+    norm_type:
+        - "L2"
+        - "H1"
+        - "grad"
+        - "Linf"
+        - "RMSE"
+    """
+    if solution_time.shape != reference_time.shape:
+        raise ValueError("Solution et référence doivent être de mêmes dimensions.")
+
+    if norm_type not in ["L2", "H1", "Linf", "grad", "RMSE"]:
+        raise ValueError(f"Type de norme invalide: {norm_type}")
+
+    errors = []
+
+    for sol, ref in zip(solution_time, reference_time):
+        if norm_type == "grad":
+            grad_diff = compute_gradient(sol - ref, dx, bc_type=bc_type)
+            error = np.sqrt(dx * np.sum(grad_diff**2))
+
+        else:
+            metrics = compute_error_metrics(
+                sol,
+                ref,
+                dx=dx,
+                compute_l2=(norm_type == "L2"),
+                compute_h1=(norm_type == "H1"),
+                compute_linf=(norm_type == "Linf"),
+                compute_rmse=(norm_type == "RMSE"),
+                bc_type=bc_type
+            )
+            error = metrics[norm_type]
+
+        errors.append(error)
+
+    return float(np.max(errors))
+
+
+def compute_convergence_orders(error: Dict[str, float],) -> Dict[str, float]:
+    """
+    Calcule les ordres de convergence :
+        ordre_N = log(e_{N-1} / e_N) / log(2)
+
+    Args:
+        errors: dictionnaire {N: erreur_N}
+
+    Returns:
+        dictionnaire {N: ordre_N}
+    """
+    orders = {}
+
+    levels = sorted(error.keys())
+
+    for i in range(1, len(levels)):
+        N_prev = levels[i - 1]
+        N = levels[i]
+
+        e1 = error[N_prev]
+        e2 = error[N]
+
+        if e2 == 0 or e1 == 0:
+            orders[N] = float('inf')
+        else:
+            orders[N] = float(np.log(e1 / e2) / np.log(2))
+
+    return orders
 
 
 def normalize_array(arr: np.ndarray, mode: Literal["minmax", "zscore", "robust"] = "minmax") -> np.ndarray:
@@ -743,6 +973,7 @@ def analyze_scheme_properties(
     Returns:
         Dict[str, Any]: Propriétés et caractéristiques du schéma
     """
+    cfl_num = compute_cfl_number(c, dt, dx)
     lambda_num = compute_lambda_number(c, dt, dx)
     is_stable, stability_msg = check_lambda_stability(lambda_num, scheme_name)
     
@@ -767,6 +998,8 @@ def analyze_scheme_properties(
     
     return {
         "scheme": scheme_name,
+        "cfl": cfl_num,
+        "cfl_number": cfl_num,
         "lambda": lambda_num,
         "lambda_number": lambda_num,
         "is_stable": is_stable,

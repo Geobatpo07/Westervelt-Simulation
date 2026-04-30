@@ -9,6 +9,13 @@ Contient toutes les fonctions utilitaires pour:
 """
 
 from utils.utils import (
+    # Décorateurs
+    timer,
+    log_execution,
+    deprecated,
+    validate_shape,
+    profile,
+
     # Gestion des fichiers et versioning
     ensure_output_dir,
     get_next_version,
@@ -49,6 +56,13 @@ from utils.utils import (
 )
 
 __all__ = [
+    # Décorateurs
+    "timer",
+    "log_execution",
+    "deprecated",
+    "validate_shape",
+    "profile",
+
     # Gestion des fichiers
     "ensure_output_dir",
     "get_next_version",

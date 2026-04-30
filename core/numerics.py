@@ -1,4 +1,4 @@
-# src/numerics.py
+# core/numerics.py
 
 import numpy as np
 
@@ -145,5 +145,5 @@ def solve_tridiagonal(lower, diag, upper, rhs):
 def compute_energy(u, u_prev, c, dt, dx):
     """Energie discrète: 0.5 * int((u_t)^2 + c^2 (u_x)^2) dx."""
     ut = _time_derivative(u, u_prev, dt)
-    ux = _spatial_derivative_all(u, dx ** 2)
+    ux = _spatial_derivative_all(u, dx)
     return 0.5 * dx * np.sum(ut**2 + c**2 * ux**2)

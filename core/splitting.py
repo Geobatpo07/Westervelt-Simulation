@@ -1,7 +1,7 @@
-# src/splitting.py
+# core/splitting.py
 
 import numpy as np
-from src.numerics import _laplacian, _apply_boundary
+from core.numerics import _laplacian, _apply_boundary
 
 
 # OPERATEUR ONDE
