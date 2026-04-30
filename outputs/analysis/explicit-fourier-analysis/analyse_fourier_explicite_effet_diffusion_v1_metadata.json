@@ -1,0 +1,47 @@
+{
+  "timestamp": "2026-04-17T03:42:54.285249",
+  "version": 1,
+  "analysis": "Effet de la diffusion",
+  "reference_c": 1500.0,
+  "reference_dx": 0.0001,
+  "reference_dt": 1.67e-08,
+  "reference_b": 1e-06,
+  "cfl": 0.25,
+  "D_values": [
+    0.0,
+    0.02,
+    0.05
+  ],
+  "stability_summary": [
+    {
+      "cfl": 0.25,
+      "D": 0.0,
+      "stability_margin": 9.375e-09,
+      "reduced_margin": 0.9375,
+      "theoretical_stable": true,
+      "spectral_radius_max": 1.0000000000000004,
+      "observed_stable": true,
+      "theory_observed_match": true
+    },
+    {
+      "cfl": 0.25,
+      "D": 0.02,
+      "stability_margin": 8.975e-09,
+      "reduced_margin": 0.8975,
+      "theoretical_stable": true,
+      "spectral_radius_max": 1.0,
+      "observed_stable": true,
+      "theory_observed_match": true
+    },
+    {
+      "cfl": 0.25,
+      "D": 0.05,
+      "stability_margin": 8.375e-09,
+      "reduced_margin": 0.8375,
+      "theoretical_stable": true,
+      "spectral_radius_max": 1.0,
+      "observed_stable": true,
+      "theory_observed_match": true
+    }
+  ]
+}

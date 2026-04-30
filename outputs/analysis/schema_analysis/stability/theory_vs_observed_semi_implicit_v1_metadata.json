@@ -1,0 +1,32 @@
+{
+  "timestamp": "2026-04-15T16:24:01.368185",
+  "version": 1,
+  "script": "experiments/analyse_schemas.py",
+  "quick": true,
+  "params": {
+    "c": 1500,
+    "rho0": 1000,
+    "beta": 4.8,
+    "mu_v": 6e-06,
+    "B_over_A": null,
+    "nu": null,
+    "dx": 2.8e-05,
+    "dt": 1.8e-08,
+    "nx": 220,
+    "nt": 140,
+    "bc": "dirichlet",
+    "scheme": "semi_implicit",
+    "k": 2.1333333333333334e-09,
+    "b": 6e-09
+  },
+  "dt_values": [
+    1e-08,
+    1.5e-08,
+    2e-08
+  ],
+  "amp_values": [
+    0.5,
+    1.0,
+    1.5
+  ]
+}

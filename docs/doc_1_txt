@@ -1,0 +1,68 @@
+# src/explicite.py
+
+from numba import njit
+import numpy as np
+
+@njit
+def laplacian_1d(u, dx):
+    """Calcul du Laplacien 1D avec conditions de bord de Dirichlet (u=0 aux bords)."""
+    res = np.zeros_like(u)
+    dx2 = dx**2
+    for i in range(1, u.shape[0] - 1):
+        res[i] = (u[i+1] - 2*u[i] + u[i-1]) / dx2
+    return res
+
+@njit
+def step_explicit(u, u_prev, c, a, beta, dt, dx, nonlinear, bc_type):
+    """Effectue un pas de temps explicite pour l'équation de Westervelt."""
+    nx = u.shape[0]
+    u_next = np.zeros_like(u)
+
+    # Calcul du Laplacien au temps n
+    # u_xx = (u[i+1] - 2*u[i] + u[i-1]) / dx^2
+
+    # Calcul de Delta u_t approx par (Delta u^n - Delta u^{n-1}) / dt
+    # Ce qui donne (u_xx^n - u_xx^{n-1}) / dt
+
+    dt2 = dt**2
+    dx2 = dx**2
+    c2 = c**2
+
+    for i in range(1, nx - 1):
+        # Termes linéaires
+        lap = (u[i+1] - 2*u[i] + u[i-1]) / dx2
+        lap_prev = (u_prev[i+1] - 2*u_prev[i] + u_prev[i-1]) / dx2
+
+        # u_tt = c^2 * lap + a * (lap - lap_prev) / dt
+        u_tt = c2 * lap + a * (lap - lap_prev) / dt
+
+        # Schéma standard : u_next = 2*u - u_prev + dt^2 * u_tt
+        val = 2 * u[i] - u_prev[i] + dt2 * u_tt
+
+        if nonlinear:
+            # Terme non-linéaire (beta/c^2) * (u^2)_tt
+            # Approximé ici par beta * (u_t * u_tt + (u_t)^2)
+            # Mais attention à la stabilité.
+            # Une forme plus stable pour Westervelt : u_tt = (c^2 Delta u + a Delta u_t) / (1 - 2*beta*u)
+            # avec beta_eff = (gamma+1)/(rho*c^2). Ici beta est passé en paramètre.
+
+            # Note: dans le code original beta était (gamma + 1) * epsilon / c^2
+            # On utilise la forme : u_tt = c^2 * lap + a * lap_t + beta * (u^2)_tt
+            # (1 - 2*beta*u) u_tt = c^2 * lap + a * lap_t + 2 * beta * (u_t)^2
+
+            u_t = (u[i] - u_prev[i]) / dt
+            # On ré-estime u_tt avec la non-linéarité
+            u_tt_nonlin = (c2 * lap + a * (lap - lap_prev) / dt + 2 * beta * u_t**2) / (1 - 2 * beta * u[i])
+            val = 2 * u[i] - u_prev[i] + dt2 * u_tt_nonlin
+
+        u_next[i] = val
+
+    # Conditions de bord
+    if bc_type == 0: # Dirichlet
+        u_next[0] = 0
+        u_next[-1] = 0
+    elif bc_type == 1: # Neumann
+        u_next[0] = u_next[1]
+        u_next[-1] = u_next[-2]
+
+    return u_next

@@ -1,0 +1,14 @@
+{
+  "explicit": {
+    "margin": 5.499978400000005e-11,
+    "stable": true
+  },
+  "semi_implicit": {
+    "margin": 5.5000215999999986e-11,
+    "stable": true
+  },
+  "stable_ratio_observed": {
+    "explicit": 0.6666666666666666,
+    "semi_implicit": 0.6666666666666666
+  }
+}
