@@ -41,11 +41,11 @@ mais n'est pas le critere decisionnel principal ici.
 
 ## Structure du projet
 
-- `src/explicite.py` : pas de temps du schema explicite.
-- `src/semi_implicite.py` : pas de temps du schema semi-implicite.
-- `src/numerics.py` : operateurs discrets, mise a jour de `F`, systeme tri-diagonal.
-- `src/solver.py` : solver unifie (`scheme="explicit"` ou `scheme="semi_implicit"`).
-- `src/analysis.py` : outils d'analyse (snapshots, cartes de stabilite).
+- `core/explicite.py` : pas de temps du schema explicite.
+- `core/semi_implicite.py` : pas de temps du schema semi-implicite.
+- `core/numerics.py` : operateurs discrets, mise a jour de `F`, systeme tri-diagonal.
+- `core/solver.py` : solver unifie (`scheme="explicit"` ou `scheme="semi_implicit"`).
+- `core/analysis.py` : outils d'analyse (snapshots, cartes de stabilite).
 - `experiments/westervelt_sim.py` : script d'exemple complet.
 
 ## Analyse de Fourier du schema explicite
