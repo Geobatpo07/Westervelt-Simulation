@@ -71,14 +71,25 @@ def _apply_boundary(u, bc_type):
         raise ValueError("bc_type doit valoir 0 (Dirichlet) ou 1 (Neumann).")
 
 
-def update_F(F_n, u_n, dt, dx, c, bc_type):
-    """Mise à jour: F^{n+1} = F^n + dt c^2 Δu^n."""
-    F_next = np.zeros_like(F_n)
+def update_F(F_n, u_n, dt, dx, c, bc_type, source=None):
+    """
+    Mise à jour :
+        F^{n+1} = F^n + dt * (c^2 Δu^n + source)
+    """
     dx2 = dx ** 2
     c2 = c ** 2
+
     lap_u = _laplacian_all(u_n, dx2)
-    F_next = F_n + dt * c2 * lap_u
+
+    if source is None:
+        source_values = 0.0
+    else:
+        source_values = source
+
+    F_next = F_n + dt * (c2 * lap_u + source_values)
+
     _apply_boundary(F_next, bc_type)
+
     return F_next
 
 
@@ -147,3 +158,7 @@ def compute_energy(u, u_prev, c, dt, dx):
     ut = _time_derivative(u, u_prev, dt)
     ux = _spatial_derivative_all(u, dx)
     return 0.5 * dx * np.sum(ut**2 + c**2 * ux**2)
+
+
+
+

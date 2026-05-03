@@ -215,7 +215,16 @@ class WesterveltSolver:
         return float(compute_energy(self.u, self.u_prev, self.param.c, self.param.dt, self.param.dx))
 
 
-    def step(self):
+    def _evaluate_source(self, source, t):
+        if source is None:
+            return None
+
+        if callable(source):
+            return source(self.x, t)
+
+        return source
+
+    def step(self, source=None):
         """Effectue une étape de temps selon le schéma choisi."""
         if self.param.scheme == "semi_implicit":
             self.u_next, F_next = step_semi_implicit(
@@ -227,6 +236,7 @@ class WesterveltSolver:
                 self.param.dt,
                 self.param.dx,
                 self.bc_type,
+                source=source,
             )
         else:
             self.u_next, F_next = step_explicit(
@@ -238,6 +248,7 @@ class WesterveltSolver:
                 self.param.dt,
                 self.param.dx,
                 self.bc_type,
+                source=source,
             )
 
         self.F = F_next.copy()
@@ -247,14 +258,16 @@ class WesterveltSolver:
 
 
     @profile
-    def run(self, store_energy=True):
+    def run(self, store_energy=True, source=None):
         """Fait tourner la simulation pour le nombre de pas de temps spécifié dans les paramètres.
         Si store_energy=True, stocke l'énergie à chaque pas de temps dans self.energy_history."""
         if store_energy and len(self.energy_history) == 0:
             self.energy_history.append(self.compute_energy())
 
-        for _ in range(self.param.nt):
-            self.step()
+        for n in range(self.param.nt):
+            t_n = n * self.param.dt
+            source_values = self._evaluate_source(source, t_n)
+            self.step(source=source_values)
             if store_energy:
                 self.energy_history.append(self.compute_energy())
 
@@ -271,7 +284,7 @@ class WesterveltSolver:
 
 
     @profile
-    def run_with_snapshots(self, times_to_save, store_energy=True):
+    def run_with_snapshots(self, times_to_save, store_energy=True, source=None):
         """Fait tourner la simulation et sauvegarde des snapshots de u à des temps spécifiés dans times_to_save (en secondes).
          Renvoie un dictionnaire {t: u_snapshot} pour les temps demandés. Si store_energy=True, stocke aussi l'énergie à chaque pas de temps dans self.energy_history."""
         if times_to_save is None:
@@ -291,10 +304,12 @@ class WesterveltSolver:
 
         snapshots = {}
         for n in range(nt + 1):
+            t_n = n * dt
             if n in indices_to_save:
                 snapshots[indices_to_save[n]] = self.u.copy()
             if n < nt:
-                self.step()
+                source_values = self._evaluate_source(source, t_n)
+                self.step(source=source_values)
                 if store_energy:
                     self.energy_history.append(self.compute_energy())
 

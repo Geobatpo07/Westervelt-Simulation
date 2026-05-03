@@ -21,7 +21,7 @@ from unittest import result
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from typing import Dict, List, Tuple, Any, Callable, Optional, Literal
+from typing import Dict, List, Tuple, Any, Callable, Optional, Literal, Mapping
 import time
 import functools
 
@@ -466,7 +466,7 @@ def compute_stable_ratio(results: List[Dict]) -> float:
 # Utilitaires Mathématiques et Statistiques
 # =============================================================================
 
-def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray:
+def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray | None:
     """Générique pour calculer le gradient."""
     if bc_type == "dirichlet":
         # gradient centré (points intérieurs)
@@ -526,15 +526,15 @@ def compute_error_metrics(
     if compute_l2:
         metrics["L2"] = float(np.sqrt(l2_squared))
     # Metrique de l'erreur H1
-    elif compute_h1:
+    if compute_h1:
         gradient_diff = compute_gradient(diff, dx, bc_type=bc_type)
         gradient_squared = dx * np.sum(gradient_diff**2)
         metrics["H1"] = float(np.sqrt(l2_squared + gradient_squared))
     # Metrique Linf
-    elif compute_linf:
+    if compute_linf:
         metrics["Linf"] = float(np.max(np.abs(diff)))
     # Metrque RMSE
-    elif compute_rmse:
+    if compute_rmse:
         metrics["RMSE"] = float(np.sqrt(np.mean(diff**2)))
 
     return metrics
@@ -640,7 +640,7 @@ def normalize_array(arr: np.ndarray, mode: Literal["minmax", "zscore", "robust"]
 
         return (arr - vmin) / (vmax - vmin)
 
-    elif mode == "zscore":
+    if mode == "zscore":
         mean = np.mean(arr)
         std = np.std(arr)
 
@@ -649,7 +649,7 @@ def normalize_array(arr: np.ndarray, mode: Literal["minmax", "zscore", "robust"]
 
         return (arr - mean) / std
 
-    elif mode == "robust":
+    if mode == "robust":
         q1, q3 = np.percentile(arr, [25, 75])
         iqr = q3 - q1
 
@@ -1071,27 +1071,47 @@ def estimate_memory_usage(
     }
 
 
+def _params_get(params: Any, key: str, default: Any = None) -> Any:
+    """
+    Lit un paramètre depuis un dictionnaire ou un objet dataclass/classique.
+
+    Permet à print_simulation_summary d'accepter:
+    - dict: params["c"] / params.get("c")
+    - dataclass: WesterveltParams(c=...)
+    - objet classique avec attributs: params.c
+    """
+    if isinstance(params, Mapping):
+        return params.get(key, default)
+
+    return getattr(params, key, default)
+
+@deprecated
 def print_simulation_summary(
-    params: Dict[str, Any],
+    params: Any,
     scheme_name: str = "semi_implicit",
     verbose: bool = True
 ) -> Dict[str, Any]:
     """
     Affiche et retourne un résumé complet de la simulation.
-    
+
     Args:
-        params: Dictionnaire des paramètres (doit contenir c, dt, dx, nx, nt)
-        scheme_name: Nom du schéma numérique
-        verbose: Afficher le résumé dans la console
-        
+        params: Paramètres sous forme de dict ou d'objet WesterveltParams.
+        scheme_name: Nom du schéma numérique.
+        verbose: Si True, affiche le résumé.
+
     Returns:
         Dict[str, Any]: Résumé de la simulation
     """
-    c = params.get("c", 1500)
-    dt = params.get("dt", 2e-8)
-    dx = params.get("dx", 1e-4)
-    nx = params.get("nx", 1200)
-    nt = params.get("nt", 1200)
+    c = _params_get(params, "c", 1500)
+    dt = _params_get(params, "dt", 2e-8)
+    dx = _params_get(params, "dx", 1e-4)
+    nx = _params_get(params, "nx", 1000)
+    nt = _params_get(params, "nt", 1000)
+    rho0 = _params_get(params, "rho0", 1000)
+    beta = _params_get(params, "beta", 3.5)
+    mu_v = _params_get(params, "mu_v", 0.0)
+    b = _params_get(params, "b", mu_v / rho0 if rho0 != 0 else 0.0)
+    k = _params_get(params, "k", beta / (rho0 * c ** 2) if rho0 != 0 and c != 0 else 0.0)
     
     lambda_num = compute_lambda_number(c, dt, dx)
     is_stable, stability_msg = check_lambda_stability(lambda_num, scheme_name)
@@ -1114,6 +1134,8 @@ def print_simulation_summary(
         print("="*70)
         print(f"\n Paramètres:")
         print(f"  • Vitesse du son (c)............ {c} m/s")
+        print(f"  • Coefficient de non-linéarité (k). {k}")
+        print(f"  • Coefficient de viscosité (b). {b}")
         print(f"  • Discrétisation spatiale (dx). {dx} m")
         print(f"  • Discrétisation temporelle (dt) {dt} s")
         print(f"  • Points spatiaux (nx)......... {nx}")
