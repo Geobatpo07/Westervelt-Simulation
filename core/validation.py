@@ -174,7 +174,8 @@ def convergence_study_manufactured(
         kappa: float = 1e4,
         scheme: str = "explicit",
         base_nx: int = 50,
-        cfl_factor: float = 0.2,
+        dt_mode: str = "cfl",
+        dt_factor: float = 0.2,
 ) -> Dict[str, Any]:
     """
     Étude de convergence avec solution fabriquée.
@@ -196,7 +197,13 @@ def convergence_study_manufactured(
         nx = base_nx * 2 ** N + 1
         dx = L / (nx - 1)
 
-        dt = cfl_factor * dx / c
+        if dt_mode == "cfl":
+            dt = dt_factor * dx / c
+        elif dt_mode == "quadratic":
+            dt = dt_factor * dx ** 2
+        else:
+            raise ValueError(f"Mode de temps inconnu : {dt_mode} | Choix : cfl, quadratic")
+
         nt = int(np.ceil(T / dt))
         dt = T / nt
 
@@ -272,7 +279,7 @@ def print_convergence_table(results: Dict[str, Any]) -> None:
     levels = sorted(errors_L2.keys())
 
     print("\nTable de convergence - solution fabriquée")
-    print("-" * 100)
+    print("-" * 130)
     print(
         f"{'N':>4} | {'dx':>12} | {'dt':>12} | "
         f"{'LinfL2':>12} | {'ord':>6} | "
@@ -280,7 +287,7 @@ def print_convergence_table(results: Dict[str, Any]) -> None:
         f"{'LinfGrad':>12} | {'ord':>6} | "
         f"{'Linf':>12} | {'ord':>6}"
     )
-    print("-" * 100)
+    print("-" * 130)
 
     for N in levels:
         o_l2 = orders_L2.get(N, np.nan)
@@ -302,4 +309,4 @@ def print_convergence_table(results: Dict[str, Any]) -> None:
             f"{o_linf:>6.3f}"
         )
 
-    print("-" * 100)
+    print("-" * 130)

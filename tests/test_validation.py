@@ -102,6 +102,20 @@ class TestManufacturedValidation(unittest.TestCase):
         self.assertTrue(0 in results['errors_L2'])
         self.assertTrue(1 in results['errors_L2'])
 
+    def test_convergence_errors_decrease(self):
+        results = convergence_study_manufactured(
+            self.funcs,
+            levels=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            L=1.0,
+            T=1e-5,
+            base_nx=10,
+            cfl_factor=0.2,
+            scheme="explicit",
+        )
+
+        self.assertLess(results["errors_L2"][1], results["errors_L2"][0])
+        self.assertLess(results["errors_L2"][2], results["errors_L2"][1])
+
 
 if __name__ == '__main__':
     unittest.main()

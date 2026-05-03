@@ -1,8 +1,8 @@
 """Validation study using the manufactured solution with Nikolic--Wohlmuth parameters.
 
 Features:
-- convergence study with Nikolic-like parameters
-- convergence table display
+- convergence study with Nikolic-like parameters (two time-stepping modes: CFL and quadratic)
+- convergence table display for both modes
 - versioned figure saving via `save_figure_with_version`
 - optional interactive display (`--mode show`) or saving (`--mode save`)
 - additional criteria: non-dégénérescence, pointwise error, L2 error, energy history
@@ -62,7 +62,8 @@ def finalize_figure(fig, base_name, mode='save', metadata=None, formats=None):
     return paths
 
 
-def plot_errors_loglog(results, mode='save', metadata=None):
+def plot_errors_loglog(results, mode='save', metadata=None, dt_mode='cfl'):
+    """Plot convergence errors on log-log scale."""
     levels = sorted(results['errors_L2'].keys())
     dxs = [results['mesh_sizes'][N] for N in levels]
     err_L2 = [results['errors_L2'][N] for N in levels]
@@ -70,50 +71,54 @@ def plot_errors_loglog(results, mode='save', metadata=None):
     err_grad = [results['errors_grad'][N] for N in levels]
     err_Linf = [results['errors_Linf'][N] for N in levels]
 
-    fig, ax = plt.subplots(figsize=(8,6))
-    ax.loglog(dxs, err_L2, 'o-', label='L2')
-    ax.loglog(dxs, err_H1, 's-', label='H1')
-    ax.loglog(dxs, err_grad, 'd-', label='grad')
-    ax.loglog(dxs, err_Linf, 'x-', label='Linf')
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.loglog(dxs, err_L2, 'o-', label='L2', linewidth=2, markersize=6)
+    ax.loglog(dxs, err_H1, 's-', label='H1', linewidth=2, markersize=6)
+    ax.loglog(dxs, err_grad, 'd-', label='grad', linewidth=2, markersize=6)
+    ax.loglog(dxs, err_Linf, 'x-', label='Linf', linewidth=2)
 
     # reference slopes (order 1 and 2)
     dx0 = dxs[0]
     err0 = err_L2[0]
-    ax.loglog(dxs, [err0 * (dx/dx0) for dx in dxs], 'k--', label='slope 1')
-    ax.loglog(dxs, [err0 * (dx/dx0)**2 for dx in dxs], 'k:', label='slope 2')
+    ax.loglog(dxs, [err0 * (dx/dx0) for dx in dxs], 'k--', label='slope 1', alpha=0.5)
+    ax.loglog(dxs, [err0 * (dx/dx0)**2 for dx in dxs], 'k:', label='slope 2', alpha=0.5)
 
-    ax.set_xlabel('dx')
-    ax.set_ylabel('Erreur')
-    ax.set_title('Etude de convergence (manufactured) - Nikolic params')
-    ax.legend()
+    ax.set_xlabel('dx', fontsize=12)
+    ax.set_ylabel('Erreur', fontsize=12)
+    title_suffix = 'CFL' if dt_mode == 'cfl' else 'Quadratic'
+    ax.set_title(f'Etude de convergence ({title_suffix} time stepping) - Nikolic params', fontsize=13)
+    ax.legend(loc='best', fontsize=11)
     ax.grid(True, which='both', ls='--', alpha=0.5)
     fig.tight_layout()
-    return finalize_figure(fig, 'convergence_errors', mode=mode, metadata=metadata)
+
+    figure_name = f'convergence_errors_{dt_mode}'
+    return finalize_figure(fig, figure_name, mode=mode, metadata=metadata)
 
 
 def plot_snapshots_compare(x, U_num, U_ref, times, mode='save', metadata=None):
-    # plot a few snapshots side by side (numeric vs exact)
+    """Plot snapshots: numeric vs exact."""
     n = len(times)
     fig, axs = plt.subplots(n, 1, figsize=(8, 2.5*n))
     if n == 1:
         axs = [axs]
     for i, t in enumerate(times):
-        axs[i].plot(x, U_ref[i], 'r--', label='Exacte')
-        axs[i].plot(x, U_num[i], 'b-', label='Numérique', alpha=0.8)
-        axs[i].set_title(f't = {t:.3e} s')
-        axs[i].legend()
+        axs[i].plot(x, U_ref[i], 'r--', label='Exacte', linewidth=2)
+        axs[i].plot(x, U_num[i], 'b-', label='Numerique', alpha=0.8, linewidth=2)
+        axs[i].set_title(f't = {t:.3e} s', fontsize=11)
+        axs[i].legend(fontsize=10)
         axs[i].grid(True, alpha=0.3)
     fig.tight_layout()
     return finalize_figure(fig, 'nikolic_case_snapshots', mode=mode, metadata=metadata)
 
 
 def plot_pointwise_error(x, U_num, U_ref, t_index, mode='save', metadata=None):
+    """Plot pointwise error."""
     error = np.abs(U_num[t_index] - U_ref[t_index])
-    fig, ax = plt.subplots(figsize=(8,4))
-    ax.semilogy(x, error, 'g-')
-    ax.set_xlabel('x')
-    ax.set_ylabel('|u_num - u_ref|')
-    ax.set_title(f'Erreur pointwise à t_index={t_index}')
+    fig, ax = plt.subplots(figsize=(8, 4))
+    ax.semilogy(x, error, 'g-', linewidth=2)
+    ax.set_xlabel('x', fontsize=12)
+    ax.set_ylabel('|u_num - u_ref|', fontsize=12)
+    ax.set_title(f'Erreur pointwise a t_index={t_index}', fontsize=13)
     ax.grid(True, which='both', ls='--', alpha=0.3)
     fig.tight_layout()
     return finalize_figure(fig, 'nikolic_case_final_error', mode=mode, metadata=metadata)
@@ -129,9 +134,15 @@ def main(mode='save', verbose=True):
         'save' to save versioned figures, 'show' to display interactively
     verbose : bool
         Whether to print convergence table and results (default: True)
+
+    Returns
+    -------
+    dict
+        Comprehensive results from both CFL and quadratic time-stepping analyses
     """
     if not isinstance(mode, str) or mode not in ('save', 'show'):
         raise ValueError(f"mode must be 'save' or 'show', got {mode}")
+
     args = parse_args()
 
     # Parameters from Nikolic notebook
@@ -142,7 +153,6 @@ def main(mode='save', verbose=True):
     T_final = 37e-6
     omega = 2.0 * np.pi / T_final
 
-
     funcs = build_numerics_function()
 
     # Override mode from CLI if provided (CLI takes precedence when called as script)
@@ -151,53 +161,98 @@ def main(mode='save', verbose=True):
 
     if verbose:
         print(f'\nRunning convergence study (Nikolic parameters) [mode={mode}]')
-    results = convergence_study_manufactured(
+
+    # CFL-based time stepping
+    if verbose:
+        print('\n>> CFL-based time stepping (dt ~ 0.2 * dx / c)')
+    results_cfl = convergence_study_manufactured(
         funcs=funcs,
-        levels=[1,2,3],
-        L=0.2,                # match notebook domain length
+        levels=[0, 1, 2, 3],
+        L=0.2,
         T=T_final,
         c=c,
         rho0=rho0,
         beta=beta,
         mu_v=mu_v,
         A=1e-3,
-        omega=omega,  # one oscillation over [0, T_final]
+        omega=omega,
         gamma=0.5,
         kappa=1e4,
         scheme='explicit',
         base_nx=50,
-        cfl_factor=0.2,
+        dt_mode='cfl',
+        dt_factor=0.2,
+    )
+
+    # Quadratic time stepping
+    if verbose:
+        print('\n>> Quadratic time stepping (dt ~ 0.1 * dx^2)')
+    results_quad = convergence_study_manufactured(
+        funcs=funcs,
+        levels=[0, 1, 2, 3],
+        L=0.2,
+        T=T_final,
+        c=c,
+        rho0=rho0,
+        beta=beta,
+        mu_v=mu_v,
+        A=1e-3,
+        omega=omega,
+        gamma=0.5,
+        kappa=1e4,
+        scheme='explicit',
+        base_nx=50,
+        dt_mode='quadratic',
+        dt_factor=0.1,
     )
 
     if verbose:
-        print_convergence_table(results)
+        print('\n' + '='*130)
+        print('CONVERGENCE TABLE - CFL TIME STEPPING')
+        print('='*130)
+        print_convergence_table(results_cfl)
 
-    # Save plot of errors vs dx
-    md = {
+        print('\n' + '='*130)
+        print('CONVERGENCE TABLE - QUADRATIC TIME STEPPING')
+        print('='*130)
+        print_convergence_table(results_quad)
+
+    # Metadata for figures
+    md_base = {
         'analysis': 'manufactured_validation_nikolic',
-        'mode': mode,
-        'levels': [1, 2, 3],
         'base_nx': 50,
         'T_final': T_final,
         'L': 0.2,
     }
-    err_paths = plot_errors_loglog(results, mode=mode, metadata=md)
-    if mode == 'save':
-        print('Saved error plot:')
-        for fmt, path in err_paths.items():
+
+    # Save plot of CFL errors vs dx
+    md_cfl = {**md_base, 'dt_mode': 'cfl', 'levels': [0, 1, 2, 3]}
+    err_paths_cfl = plot_errors_loglog(results_cfl, mode=mode, metadata=md_cfl, dt_mode='cfl')
+    if mode == 'save' and verbose:
+        print('\nSaved CFL error plot:')
+        for fmt, path in err_paths_cfl.items():
             print(f'  {fmt}: {path}')
 
-    # Run a mid-resolution case and request snapshots at several times
+    # Save plot of quadratic errors vs dx
+    md_quad = {**md_base, 'dt_mode': 'quadratic', 'levels': [0, 1, 2, 3]}
+    err_paths_quad = plot_errors_loglog(results_quad, mode=mode, metadata=md_quad, dt_mode='quadratic')
+    if mode == 'save' and verbose:
+        print('\nSaved quadratic time-stepping error plot:')
+        for fmt, path in err_paths_quad.items():
+            print(f'  {fmt}: {path}')
+
+    # Use CFL results for snapshot comparison (as a reference)
+    results = results_cfl
     Nmid = 2
     case = results['cases'][Nmid]
     x = case['x']
     times = case['times']
 
-    # pick a subset of times (start, mid, final)
+    # Pick a subset of times (start, mid, final)
     times_idx = [0, len(times)//2, len(times)-1]
     times_to_plot = [times[i] for i in times_idx]
 
-    # run a fresh case with those times to ensure U_num returned as array
+    # Run a fresh case with those times to ensure U_num returned as array
     dx_mid = results["mesh_sizes"][Nmid]
     dt_mid = results["time_steps"][Nmid]
     nx_mid = int(round(0.2 / dx_mid)) + 1
@@ -233,10 +288,10 @@ def main(mode='save', verbose=True):
             print(f'  {name}: {value:.6e}')
 
     # Plot compare snapshots
-    out_pref = os.path.join(OUT_DIR, 'nikolic_case')
-    snap_paths = plot_snapshots_compare(x, U_num, U_ref, times_returned, mode=mode, metadata=md)
-    err_paths_snap = plot_pointwise_error(x, U_num, U_ref, -1, mode=mode, metadata=md)
-    if mode == 'save':
+    md_snap = {**md_base, 'dt_mode': 'cfl', 'snapshot_case': True}
+    snap_paths = plot_snapshots_compare(x, U_num, U_ref, times_returned, mode=mode, metadata=md_snap)
+    err_paths_snap = plot_pointwise_error(x, U_num, U_ref, -1, mode=mode, metadata=md_snap)
+    if mode == 'save' and verbose:
         print('Saved snapshot comparison plot:')
         for fmt, path in snap_paths.items():
             print(f'  {fmt}: {path}')
@@ -268,13 +323,14 @@ def main(mode='save', verbose=True):
     solver_for_case = res["solver"]
     if hasattr(solver_for_case, 'energy_history') and solver_for_case.energy_history:
         energy = solver_for_case.energy_history
-        fig, ax = plt.subplots(figsize=(6,3))
-        ax.plot(np.arange(len(energy)) * results['time_steps'][Nmid], energy, '-o')
-        ax.set_xlabel('time (s)')
-        ax.set_ylabel('Discrete energy')
-        ax.set_title('Energy history (sample case)')
+        fig, ax = plt.subplots(figsize=(6, 3))
+        ax.plot(np.arange(len(energy)) * results['time_steps'][Nmid], energy, '-o', linewidth=2, markersize=5)
+        ax.set_xlabel('time (s)', fontsize=12)
+        ax.set_ylabel('Discrete energy', fontsize=12)
+        ax.set_title('Energy history (sample case)', fontsize=13)
+        ax.grid(True, alpha=0.3)
         fig.tight_layout()
-        en_paths = finalize_figure(fig, 'energy_history', mode=mode, metadata=md)
+        en_paths = finalize_figure(fig, 'energy_history', mode=mode, metadata=md_snap)
         if mode == 'save' and verbose:
             print('Saved energy history:')
             for fmt, path in en_paths.items():
@@ -282,10 +338,20 @@ def main(mode='save', verbose=True):
     elif verbose:
         print('No energy history available for the stored case.')
 
-    return criteria, snapshot_errors, err_paths, snap_paths, err_paths_snap, en_paths
+    return {
+        'criteria': criteria,
+        'snapshot_errors': snapshot_errors,
+        'results_cfl': results_cfl,
+        'results_quad': results_quad,
+        'err_paths_cfl': err_paths_cfl,
+        'err_paths_quad': err_paths_quad,
+        'snap_paths': snap_paths,
+        'err_paths_snap': err_paths_snap,
+        'en_paths': en_paths,
+    }
 
 
 if __name__ == '__main__':
     args = parse_args()
-    main(args.mode, verbose=True)
+    main(mode=args.mode, verbose=True)
 
