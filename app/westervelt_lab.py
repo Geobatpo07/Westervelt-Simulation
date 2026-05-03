@@ -557,6 +557,55 @@ def render_header(params: WesterveltParams, numbers: dict[str, float | bool], to
         st.warning("Le schema explicite est hors marge de stabilite lineaire pour ces pas.")
 
 
+def render_home_page(params: WesterveltParams, numbers: dict[str, float | bool]):
+    st.subheader("Propagation acoustique non lineaire")
+    st.markdown(
+        """
+        Westervelt Lab est un espace d'exploration numerique pour visualiser la
+        propagation d'une onde acoustique lorsque les effets non lineaires,
+        dissipatifs et les contraintes de stabilite deviennent importants.
+
+        Le modele de Westervelt apparait notamment en acoustique medicale,
+        ultrasons focalises, propagation de fortes amplitudes et analyse de
+        schemas pour equations hyperboliques non lineaires. Ici, l'objectif est
+        de rendre ces dynamiques visibles: evolution spatiale de l'onde,
+        energie discrete, stabilite observee et sensibilite aux parametres.
+        """
+    )
+
+    st.latex(r"(1 - 2ku)u_{tt} - c^2 \Delta u + b \Delta u_t = 2k(u_t)^2")
+
+    left, right = st.columns([0.52, 0.48])
+    with left:
+        st.markdown(
+            """
+            **Ce lab met l'accent sur**
+
+            - la comparaison entre schema explicite et semi-implicite;
+            - l'effet des conditions de bord Dirichlet ou Neumann;
+            - le role des amplitudes initiales et du terme non lineaire;
+            - la marge de stabilite liee a `dt`, `dx`, `c`, `b` et `k`;
+            - l'affichage temps reel accelere par kernels Numba paralleles.
+            """
+        )
+
+    with right:
+        st.markdown(
+            f"""
+            **Configuration actuellement selectionnee**
+
+            - Schema: `{params.scheme}`
+            - Condition limite: `{params.bc}`
+            - Grille: `{params.nx}` points
+            - Pas de temps: `{params.dt:.3e}` s
+            - CFL: `{numbers["cfl"]:.4g}`
+            - Moteur live: `numba-parallel` si Numba est disponible
+            """
+        )
+
+    st.info("Regle les parametres dans la sidebar, puis clique sur **Lancer la simulation** pour demarrer.")
+
+
 def render_simulation_results(
     simulation: dict,
     params: WesterveltParams,
@@ -654,9 +703,6 @@ def main():
     total_time = params.nt * params.dt
     domain_length = params.dx * (params.nx - 1)
 
-    if not run_clicked and "last_simulation" not in st.session_state:
-        run_clicked = True
-
     live_run = bool(run_clicked and live_options["enabled"])
     header_area = st.empty()
     live_area = st.empty()
@@ -691,7 +737,7 @@ def main():
 
     if simulation is None:
         with results_area.container():
-            st.info("Lance une simulation pour afficher les resultats.")
+            render_home_page(params, numbers)
         return
 
     if live_run:
