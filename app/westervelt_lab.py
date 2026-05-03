@@ -1,3 +1,5 @@
+# ./app/westervelt_lab.py
+
 from __future__ import annotations
 
 import contextlib
@@ -15,6 +17,15 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.solver import WesterveltParams, WesterveltSolver
+from core.kernels_numba import (
+    NUMBA_AVAILABLE,
+    allocate_semi_implicit_workspace,
+    compute_energy_numba,
+    numba_thread_count,
+    step_explicit_inplace,
+    step_semi_implicit_inplace,
+    warm_up_numba,
+)
 from utils import build_scan_grid, get_scan_axes
 
 
@@ -193,28 +204,145 @@ def create_solver(params: WesterveltParams, init: dict) -> WesterveltSolver:
     return solver
 
 
-@st.cache_data(show_spinner=False)
-def run_simulation_cached(params_payload: dict, init_payload: dict, snapshot_times: tuple[float, ...]):
+@st.cache_resource(show_spinner=False)
+def warm_up_numba_cached():
+    warm_up_numba()
+    return True
+
+
+def finite_max_abs(values: np.ndarray) -> float:
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return float("nan")
+    return float(np.max(np.abs(finite_values)))
+
+
+def snapshot_indices(snapshot_times: tuple[float, ...], dt: float, nt: int) -> dict[int, float]:
+    indices_to_save = {}
+    for t in snapshot_times:
+        n = int(round(float(t) / dt))
+        if 0 <= n <= nt:
+            indices_to_save[n] = float(t)
+    return indices_to_save
+
+
+def run_simulation_numba(
+    params_payload: dict,
+    init_payload: dict,
+    snapshot_times: tuple[float, ...],
+    render_every: int | None = None,
+    live_container=None,
+):
     params = make_params(**params_payload)
     solver = create_solver(params, init_payload)
 
-    with contextlib.redirect_stdout(io.StringIO()):
-        snapshots = solver.run_with_snapshots(snapshot_times, store_energy=True)
+    if NUMBA_AVAILABLE:
+        warm_up_numba_cached()
 
-    energy = np.asarray(solver.energy_history, dtype=float)
-    denominator = 1.0 - 2.0 * solver.param.k * solver.u
+    x = solver.x.copy()
+    u_prev = np.asarray(solver.u_prev, dtype=np.float64).copy()
+    u = np.asarray(solver.u, dtype=np.float64).copy()
+    F = np.asarray(solver.F, dtype=np.float64).copy()
+    u_next = np.empty_like(u)
+    F_next = np.empty_like(F)
+    workspace = allocate_semi_implicit_workspace(params.nx, dtype=u.dtype)
+
+    dt = float(params.dt)
+    nt = int(params.nt)
+    indices_to_save = snapshot_indices(snapshot_times, dt, nt)
+    snapshots = {}
+    energy_values = [float(compute_energy_numba(u, u_prev, params.c, dt, params.dx))]
+
+    frame_slot = None
+    progress_slot = None
+    status_slot = None
+    y_limit = max(finite_max_abs(u) * 1.15, 1.0e-12)
+    render_stride = max(1, int(render_every or nt or 1))
+
+    if live_container is not None:
+        with live_container.container():
+            st.subheader("Propagation en direct")
+            frame_slot = st.empty()
+            progress_slot = st.progress(0.0)
+            status_slot = st.empty()
+
+    for n in range(nt + 1):
+        if n in indices_to_save:
+            snapshots[indices_to_save[n]] = u.copy()
+
+        should_render = live_container is not None and (n == 0 or n == nt or n % render_stride == 0)
+        if should_render and frame_slot is not None:
+            current_max = finite_max_abs(u)
+            if np.isfinite(current_max):
+                y_limit = max(y_limit, current_max * 1.15, 1.0e-12)
+            fig = plot_live_solution(x, u, params, n, y_limit)
+            frame_slot.pyplot(fig, clear_figure=True)
+            plt.close(fig)
+            if progress_slot is not None:
+                progress_slot.progress(1.0 if nt == 0 else n / nt)
+            if status_slot is not None:
+                status_slot.caption(f"pas {n}/{nt} | t = {n * dt * 1e6:.3f} us | max |u| = {current_max:.5g}")
+
+        if n >= nt:
+            continue
+
+        if params.scheme == "semi_implicit":
+            step_semi_implicit_inplace(
+                u,
+                F,
+                u_next,
+                F_next,
+                params.c,
+                params.b,
+                params.k,
+                dt,
+                params.dx,
+                solver.bc_type,
+                *workspace,
+            )
+        else:
+            step_explicit_inplace(
+                u,
+                F,
+                u_next,
+                F_next,
+                params.c,
+                params.b,
+                params.k,
+                dt,
+                params.dx,
+                solver.bc_type,
+            )
+
+        previous_u = u
+        u_prev = previous_u
+        u = u_next
+        u_next = previous_u
+        F, F_next = F_next, F
+
+        energy_values.append(float(compute_energy_numba(u, u_prev, params.c, dt, params.dx)))
+
+    energy = np.asarray(energy_values, dtype=float)
+    denominator = 1.0 - 2.0 * params.k * u
 
     return {
-        "x": solver.x,
-        "u": solver.u,
-        "u_prev": solver.u_prev,
-        "F": solver.F,
+        "x": x,
+        "u": u.copy(),
+        "u_prev": u_prev.copy(),
+        "F": F.copy(),
         "energy": energy,
         "snapshots": {float(t): np.asarray(values, dtype=float) for t, values in snapshots.items()},
-        "max_abs_u": float(np.max(np.abs(solver.u))),
+        "max_abs_u": finite_max_abs(u),
         "min_denom": float(np.min(denominator)),
-        "finite": bool(np.all(np.isfinite(solver.u)) and np.all(np.isfinite(energy))),
+        "finite": bool(np.all(np.isfinite(u)) and np.all(np.isfinite(energy))),
+        "engine": "numba-parallel" if NUMBA_AVAILABLE else "python-fallback",
+        "threads": numba_thread_count(),
     }
+
+
+@st.cache_data(show_spinner=False)
+def run_simulation_cached(params_payload: dict, init_payload: dict, snapshot_times: tuple[float, ...]):
+    return run_simulation_numba(params_payload, init_payload, snapshot_times)
 
 
 @st.cache_data(show_spinner=False)
@@ -265,6 +393,19 @@ def plot_final_solution(x: np.ndarray, u: np.ndarray):
     ax.set_xlabel("x (m)")
     ax.set_ylabel("u final")
     ax.set_title("Solution finale")
+    ax.grid(alpha=0.25)
+    return fig
+
+
+def plot_live_solution(x: np.ndarray, u: np.ndarray, params: WesterveltParams, step: int, y_limit: float):
+    fig, ax = plt.subplots(figsize=(9, 3.4))
+    ax.plot(x, u, linewidth=1.5, color="#315c8a")
+    ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.45)
+    ax.set_xlim(float(x[0]), float(x[-1]))
+    ax.set_ylim(-y_limit, y_limit)
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("u(x,t)")
+    ax.set_title(f"Propagation de l'onde - t = {step * params.dt * 1e6:.3f} us")
     ax.grid(alpha=0.25)
     return fig
 
@@ -362,6 +503,8 @@ def sidebar_controls():
         st.header("Sortie")
         snapshot_default = len(preset_config["snapshot_times"]) if preset_config["snapshot_times"] else 5
         snapshot_count = st.slider("Nombre de snapshots", 2, 8, snapshot_default)
+        live_enabled = st.checkbox("Propagation en direct", value=False)
+        render_every = st.slider("Pas entre images", 1, 250, min(25, int(nt)), disabled=not live_enabled)
         run_clicked = st.button("Lancer la simulation", type="primary", use_container_width=True)
 
     params_payload = {
@@ -386,7 +529,11 @@ def sidebar_controls():
         "sigma2": float(max(sigma2, 1e-12)),
     }
     scan_defaults = preset_config["scan"]
-    return params_payload, init_payload, int(snapshot_count), run_clicked, preset, scan_defaults
+    live_options = {
+        "enabled": bool(live_enabled),
+        "render_every": int(render_every),
+    }
+    return params_payload, init_payload, int(snapshot_count), run_clicked, preset, scan_defaults, live_options
 
 
 def snapshot_times_for_preset(preset: str, total_time: float, snapshot_count: int) -> tuple[float, ...]:
@@ -396,15 +543,8 @@ def snapshot_times_for_preset(preset: str, total_time: float, snapshot_count: in
     return tuple(np.linspace(0.0, total_time, snapshot_count))
 
 
-def main():
-    st.set_page_config(page_title="Westervelt Lab", page_icon=None, layout="wide")
+def render_header(params: WesterveltParams, numbers: dict[str, float | bool], total_time: float, domain_length: float):
     st.title("Westervelt Lab")
-
-    params_payload, init_payload, snapshot_count, run_clicked, preset, scan_defaults = sidebar_controls()
-    params = make_params(**params_payload)
-    numbers = stability_numbers(params)
-    total_time = params.nt * params.dt
-    domain_length = params.dx * (params.nx - 1)
 
     metric_cols = st.columns(5)
     metric_cols[0].metric("CFL", f"{numbers['cfl']:.4g}")
@@ -416,25 +556,20 @@ def main():
     if params.scheme == "explicit" and not numbers["stable_margin"]:
         st.warning("Le schema explicite est hors marge de stabilite lineaire pour ces pas.")
 
-    if not run_clicked and "last_simulation" not in st.session_state:
-        run_clicked = True
 
-    if run_clicked:
-        snapshot_times = snapshot_times_for_preset(preset, total_time, snapshot_count)
-        with st.spinner("Simulation en cours..."):
-            st.session_state["last_simulation"] = run_simulation_cached(params_payload, init_payload, snapshot_times)
-            st.session_state["last_payload"] = (params_payload, init_payload)
-
-    simulation = st.session_state.get("last_simulation")
-
-    if simulation is None:
-        st.info("Lance une simulation pour afficher les resultats.")
-        return
-
-    status_cols = st.columns(3)
+def render_simulation_results(
+    simulation: dict,
+    params: WesterveltParams,
+    params_payload: dict,
+    init_payload: dict,
+    numbers: dict[str, float | bool],
+    scan_defaults: dict,
+):
+    status_cols = st.columns(4)
     status_cols[0].metric("max |u| final", f"{simulation['max_abs_u']:.5g}")
     status_cols[1].metric("min(1 - 2ku)", f"{simulation['min_denom']:.5g}")
     status_cols[2].metric("Etat numerique", "fini" if simulation["finite"] else "non fini")
+    status_cols[3].metric("Moteur", simulation.get("engine", "solver"), f"{simulation.get('threads', 1)} thread(s)")
 
     tab_solution, tab_energy, tab_scan, tab_data = st.tabs(["Solution", "Energie", "Scan stabilite", "Donnees"])
 
@@ -508,6 +643,63 @@ def main():
             use_container_width=True,
             hide_index=True,
         )
+
+
+def main():
+    st.set_page_config(page_title="Westervelt Lab", page_icon=None, layout="wide")
+
+    params_payload, init_payload, snapshot_count, run_clicked, preset, scan_defaults, live_options = sidebar_controls()
+    params = make_params(**params_payload)
+    numbers = stability_numbers(params)
+    total_time = params.nt * params.dt
+    domain_length = params.dx * (params.nx - 1)
+
+    if not run_clicked and "last_simulation" not in st.session_state:
+        run_clicked = True
+
+    live_run = bool(run_clicked and live_options["enabled"])
+    header_area = st.empty()
+    live_area = st.empty()
+    results_area = st.empty()
+
+    if not live_run:
+        with header_area.container():
+            render_header(params, numbers, total_time, domain_length)
+
+    if run_clicked:
+        snapshot_times = snapshot_times_for_preset(preset, total_time, snapshot_count)
+        if live_run:
+            header_area.empty()
+            results_area.empty()
+            if NUMBA_AVAILABLE:
+                with st.spinner("Compilation Numba..."):
+                    warm_up_numba_cached()
+            st.session_state["last_simulation"] = run_simulation_numba(
+                params_payload,
+                init_payload,
+                snapshot_times,
+                render_every=live_options["render_every"],
+                live_container=live_area,
+            )
+            live_area.empty()
+        else:
+            with st.spinner("Simulation en cours..."):
+                st.session_state["last_simulation"] = run_simulation_cached(params_payload, init_payload, snapshot_times)
+        st.session_state["last_payload"] = (params_payload, init_payload)
+
+    simulation = st.session_state.get("last_simulation")
+
+    if simulation is None:
+        with results_area.container():
+            st.info("Lance une simulation pour afficher les resultats.")
+        return
+
+    if live_run:
+        with header_area.container():
+            render_header(params, numbers, total_time, domain_length)
+
+    with results_area.container():
+        render_simulation_results(simulation, params, params_payload, init_payload, numbers, scan_defaults)
 
 
 if __name__ == "__main__":
