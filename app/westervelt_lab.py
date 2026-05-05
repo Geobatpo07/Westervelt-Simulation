@@ -5,10 +5,11 @@ from __future__ import annotations
 import contextlib
 import io
 import sys
+import time
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import numpy as np
+import plotly.graph_objects as go
 import streamlit as st
 
 
@@ -19,6 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from core.solver import WesterveltParams, WesterveltSolver
 from core.kernels_numba import (
     NUMBA_AVAILABLE,
+    NUMBA_PARALLEL_ENABLED,
     allocate_semi_implicit_workspace,
     compute_energy_numba,
     numba_thread_count,
@@ -45,6 +47,10 @@ BOUNDARIES = {
     "Dirichlet homogene": "dirichlet",
     "Neumann homogene": "neumann",
 }
+
+PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
+LIVE_PLOTLY_CONFIG = {"displaylogo": False, "displayModeBar": False, "responsive": True, "staticPlot": True}
+LIVE_FRAME_PAUSE_SECONDS = 0.03
 
 NIKOLIC_SNAPSHOT_TIMES = (0.0, 5e-6, 9.25e-6, 15e-6, 20e-6, 25e-6, 30e-6, 37e-6)
 
@@ -256,7 +262,7 @@ def run_simulation_numba(
     frame_slot = None
     progress_slot = None
     status_slot = None
-    y_limit = max(finite_max_abs(u) * 1.15, 1.0e-12)
+    live_y_limit = max(finite_max_abs(u) * 1.6, 1.0e-12)
     render_stride = max(1, int(render_every or nt or 1))
 
     if live_container is not None:
@@ -273,15 +279,13 @@ def run_simulation_numba(
         should_render = live_container is not None and (n == 0 or n == nt or n % render_stride == 0)
         if should_render and frame_slot is not None:
             current_max = finite_max_abs(u)
-            if np.isfinite(current_max):
-                y_limit = max(y_limit, current_max * 1.15, 1.0e-12)
-            fig = plot_live_solution(x, u, params, n, y_limit)
-            frame_slot.pyplot(fig, clear_figure=True)
-            plt.close(fig)
+            fig = plot_live_solution(x, u, params, n, live_y_limit)
+            frame_slot.plotly_chart(fig, width="stretch", config=LIVE_PLOTLY_CONFIG, key="live-propagation")
             if progress_slot is not None:
                 progress_slot.progress(1.0 if nt == 0 else n / nt)
             if status_slot is not None:
                 status_slot.caption(f"pas {n}/{nt} | t = {n * dt * 1e6:.3f} us | max |u| = {current_max:.5g}")
+            time.sleep(LIVE_FRAME_PAUSE_SECONDS)
 
         if n >= nt:
             continue
@@ -335,7 +339,7 @@ def run_simulation_numba(
         "max_abs_u": finite_max_abs(u),
         "min_denom": float(np.min(denominator)),
         "finite": bool(np.all(np.isfinite(u)) and np.all(np.isfinite(energy))),
-        "engine": "numba-parallel" if NUMBA_AVAILABLE else "python-fallback",
+        "engine": "numba-parallel" if NUMBA_AVAILABLE and NUMBA_PARALLEL_ENABLED else "numba-serial" if NUMBA_AVAILABLE else "python-fallback",
         "threads": numba_thread_count(),
     }
 
@@ -363,50 +367,83 @@ def run_scan_cached(params_payload: dict, init_payload: dict, dt_values: tuple[f
         )
 
 
-def plot_snapshots(x: np.ndarray, snapshots: dict[float, np.ndarray]):
-    fig, ax = plt.subplots(figsize=(9, 4.8))
-    for t, values in sorted(snapshots.items()):
-        ax.plot(x, values, linewidth=1.5, label=f"{t * 1e6:.2f} us")
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("u(x,t)")
-    ax.set_title("Snapshots spatiaux")
-    ax.grid(alpha=0.25)
-    ax.legend(loc="best", fontsize=8)
+def apply_plotly_layout(fig: go.Figure, title: str, x_title: str, y_title: str, height: int = 380) -> go.Figure:
+    fig.update_layout(
+        template="plotly_white",
+        title=title,
+        xaxis_title=x_title,
+        yaxis_title=y_title,
+        height=height,
+        margin=dict(l=20, r=20, t=56, b=24),
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0),
+    )
+    fig.update_xaxes(showgrid=True, gridcolor="rgba(0,0,0,0.08)")
+    fig.update_yaxes(showgrid=True, gridcolor="rgba(0,0,0,0.08)", zeroline=True, zerolinecolor="rgba(0,0,0,0.32)")
     return fig
+
+
+def plot_snapshots(x: np.ndarray, snapshots: dict[float, np.ndarray]):
+    fig = go.Figure()
+    for t, values in sorted(snapshots.items()):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=values,
+                mode="lines",
+                name=f"{t * 1e6:.2f} us",
+                line=dict(width=1.7),
+            )
+        )
+    return apply_plotly_layout(fig, "Snapshots spatiaux", "x (m)", "u(x,t)", height=460)
 
 
 def plot_energy(energy: np.ndarray, dt: float):
-    fig, ax = plt.subplots(figsize=(9, 3.4))
-    time = np.arange(energy.size) * dt
-    ax.plot(time, energy, linewidth=1.6, color="#315c8a")
-    ax.set_xlabel("t (s)")
-    ax.set_ylabel("Energie discrete")
-    ax.set_title("Evolution de l'energie")
-    ax.grid(alpha=0.25)
-    return fig
+    time_us = np.arange(energy.size) * dt * 1e6
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=time_us,
+            y=energy,
+            mode="lines",
+            name="Energie",
+            line=dict(color="#315c8a", width=2.0),
+        )
+    )
+    return apply_plotly_layout(fig, "Evolution de l'energie", "t (us)", "Energie discrete", height=360)
 
 
 def plot_final_solution(x: np.ndarray, u: np.ndarray):
-    fig, ax = plt.subplots(figsize=(9, 3.4))
-    ax.plot(x, u, linewidth=1.7, color="#467a4b")
-    ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.45)
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("u final")
-    ax.set_title("Solution finale")
-    ax.grid(alpha=0.25)
-    return fig
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=u,
+            mode="lines",
+            name="u final",
+            line=dict(color="#467a4b", width=2.0),
+        )
+    )
+    fig.add_hline(y=0.0, line_width=1, line_color="rgba(68,68,68,0.45)")
+    return apply_plotly_layout(fig, "Solution finale", "x (m)", "u final", height=360)
 
 
 def plot_live_solution(x: np.ndarray, u: np.ndarray, params: WesterveltParams, step: int, y_limit: float):
-    fig, ax = plt.subplots(figsize=(9, 3.4))
-    ax.plot(x, u, linewidth=1.5, color="#315c8a")
-    ax.axhline(0.0, color="#444444", linewidth=0.8, alpha=0.45)
-    ax.set_xlim(float(x[0]), float(x[-1]))
-    ax.set_ylim(-y_limit, y_limit)
-    ax.set_xlabel("x (m)")
-    ax.set_ylabel("u(x,t)")
-    ax.set_title(f"Propagation de l'onde - t = {step * params.dt * 1e6:.3f} us")
-    ax.grid(alpha=0.25)
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergl(
+            x=x,
+            y=u,
+            mode="lines",
+            name="u(x,t)",
+            line=dict(color="#315c8a", width=2.0),
+        )
+    )
+    fig.add_hline(y=0.0, line_width=1, line_color="rgba(68,68,68,0.45)")
+    apply_plotly_layout(fig, "Propagation de l'onde", "x (m)", "u(x,t)", height=420)
+    fig.update_xaxes(range=[float(x[0]), float(x[-1])])
+    fig.update_yaxes(range=[-float(y_limit), float(y_limit)])
+    fig.update_layout(showlegend=False, uirevision="westervelt-live", transition=dict(duration=0))
     return fig
 
 
@@ -414,20 +451,26 @@ def plot_scan(results: list[dict]):
     dt_vals, amp_vals = get_scan_axes(results)
     grid = build_scan_grid(results, dt_vals, amp_vals, lambda r: 1.0 if r.get("stable", False) else 0.0, default=np.nan)
 
-    fig, ax = plt.subplots(figsize=(8.5, 4.8))
-    image = ax.imshow(
-        grid,
-        origin="lower",
-        aspect="auto",
-        extent=[min(dt_vals), max(dt_vals), min(amp_vals), max(amp_vals)],
-        vmin=0.0,
-        vmax=1.0,
-        cmap="RdYlGn",
+    fig = go.Figure(
+        data=go.Heatmap(
+            x=dt_vals,
+            y=amp_vals,
+            z=grid,
+            zmin=0.0,
+            zmax=1.0,
+            colorscale="RdYlGn",
+            colorbar=dict(title="Stable"),
+            hovertemplate="dt=%{x:.3e} s<br>Amplitude=%{y:.3e}<br>Stable=%{z:.0f}<extra></extra>",
+        )
     )
-    ax.set_xlabel("dt (s)")
-    ax.set_ylabel("Amplitude u0")
-    ax.set_title("Carte de stabilite observee")
-    fig.colorbar(image, ax=ax, label="1 = stable, 0 = instable")
+    fig.update_layout(
+        template="plotly_white",
+        title="Carte de stabilite observee",
+        xaxis_title="dt (s)",
+        yaxis_title="Amplitude u0",
+        height=460,
+        margin=dict(l=20, r=20, t=56, b=24),
+    )
     return fig
 
 
@@ -585,7 +628,7 @@ def render_home_page(params: WesterveltParams, numbers: dict[str, float | bool])
             - l'effet des conditions de bord Dirichlet ou Neumann;
             - le role des amplitudes initiales et du terme non lineaire;
             - la marge de stabilite liee a `dt`, `dx`, `c`, `b` et `k`;
-            - l'affichage temps reel accelere par kernels Numba paralleles.
+            - l'affichage temps reel accelere par kernels Numba.
             """
         )
 
@@ -599,7 +642,7 @@ def render_home_page(params: WesterveltParams, numbers: dict[str, float | bool])
             - Grille: `{params.nx}` points
             - Pas de temps: `{params.dt:.3e}` s
             - CFL: `{numbers["cfl"]:.4g}`
-            - Moteur live: `numba-parallel` si Numba est disponible
+            - Moteur live: `numba-serial` pour ce test
             """
         )
 
@@ -623,11 +666,11 @@ def render_simulation_results(
     tab_solution, tab_energy, tab_scan, tab_data = st.tabs(["Solution", "Energie", "Scan stabilite", "Donnees"])
 
     with tab_solution:
-        st.pyplot(plot_snapshots(simulation["x"], simulation["snapshots"]), clear_figure=True)
-        st.pyplot(plot_final_solution(simulation["x"], simulation["u"]), clear_figure=True)
+        st.plotly_chart(plot_snapshots(simulation["x"], simulation["snapshots"]), width="stretch", config=PLOTLY_CONFIG)
+        st.plotly_chart(plot_final_solution(simulation["x"], simulation["u"]), width="stretch", config=PLOTLY_CONFIG)
 
     with tab_energy:
-        st.pyplot(plot_energy(simulation["energy"], params.dt), clear_figure=True)
+        st.plotly_chart(plot_energy(simulation["energy"], params.dt), width="stretch", config=PLOTLY_CONFIG)
 
     with tab_scan:
         left, right = st.columns([0.34, 0.66])
@@ -661,7 +704,7 @@ def render_simulation_results(
             if scan_results:
                 stable_count = sum(1 for row in scan_results if row.get("stable", False))
                 st.metric("Configurations stables", f"{stable_count}/{len(scan_results)}")
-                st.pyplot(plot_scan(scan_results), clear_figure=True)
+                st.plotly_chart(plot_scan(scan_results), width="stretch", config=PLOTLY_CONFIG)
                 st.download_button(
                     "Telecharger le scan CSV",
                     data=results_to_csv(scan_results),

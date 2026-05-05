@@ -29,6 +29,7 @@ except Exception:  # pragma: no cover - depend de l'environnement local
         return 1
 
 
+NUMBA_PARALLEL_ENABLED = False
 SAFE_DENOMINATOR_EPS = 1.0e-12
 PIVOT_EPS = 1.0e-14
 
@@ -69,7 +70,7 @@ def apply_boundary_inplace(values, bc_type):
         raise ValueError("bc_type doit valoir 0 (Dirichlet) ou 1 (Neumann).")
 
 
-@njit(cache=True, parallel=True, nogil=True)
+@njit(cache=True, parallel=NUMBA_PARALLEL_ENABLED, nogil=True)
 def update_F_inplace(F, u, F_next, c, dt, dx, bc_type):
     """Calcule F^{n+1} dans F_next."""
     nx = u.shape[0]
@@ -83,7 +84,7 @@ def update_F_inplace(F, u, F_next, c, dt, dx, bc_type):
     apply_boundary_inplace(F_next, bc_type)
 
 
-@njit(cache=True, parallel=True, nogil=True)
+@njit(cache=True, parallel=NUMBA_PARALLEL_ENABLED, nogil=True)
 def step_explicit_inplace(u, F, u_next, F_next, c, b, k, dt, dx, bc_type):
     """Effectue un pas explicite dans les buffers fournis."""
     nx = u.shape[0]
@@ -100,7 +101,7 @@ def step_explicit_inplace(u, F, u_next, F_next, c, b, k, dt, dx, bc_type):
     apply_boundary_inplace(u_next, bc_type)
 
 
-@njit(cache=True, parallel=True, nogil=True)
+@njit(cache=True, parallel=NUMBA_PARALLEL_ENABLED, nogil=True)
 def step_semi_implicit_inplace(
     u,
     F,
@@ -172,7 +173,7 @@ def step_semi_implicit_inplace(
     apply_boundary_inplace(u_next, bc_type)
 
 
-@njit(cache=True, parallel=True, nogil=True)
+@njit(cache=True, parallel=NUMBA_PARALLEL_ENABLED, nogil=True)
 def compute_energy_numba(u, u_prev, c, dt, dx):
     """Energie discrete compatible avec core.numerics.compute_energy."""
     nx = u.shape[0]
@@ -192,8 +193,8 @@ def compute_energy_numba(u, u_prev, c, dt, dx):
 
 
 def numba_thread_count() -> int:
-    """Retourne le nombre de threads utilises par les kernels paralleles."""
-    return int(get_num_threads()) if NUMBA_AVAILABLE else 1
+    """Retourne le nombre de threads utilises par les kernels courants."""
+    return int(get_num_threads()) if NUMBA_AVAILABLE and NUMBA_PARALLEL_ENABLED else 1
 
 
 def warm_up_numba() -> None:
