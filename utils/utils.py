@@ -100,6 +100,19 @@ def validate_shape(func: Callable) -> Callable:
 
 
 def profile(func: Callable) -> Callable:
+    """
+    Décorateur pour profiler le temps d'exécution et la consommation mémoire.
+
+    Mesure le pic de mémoire utilisé pendant l'exécution de la fonction
+    et stocke les résultats dans l'attribut `profiler` de l'objet si la
+    fonction est une méthode de classe.
+
+    Args:
+        func: Fonction à profiler.
+
+    Returns:
+        Callable: Fonction wrappée.
+    """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         self_obj = args[0] if len(args) > 0 else None
@@ -337,6 +350,231 @@ def save_data_with_version(
 
 
 # =============================================================================
+# Sauvegarde / Chargement des solutions numériques
+# =============================================================================
+
+def save_solution_npz(
+        path: str | Path,
+        x: np.ndarray,
+        times: np.ndarray,
+        U: np.ndarray,
+        metadata: Optional[Dict[str, Any]] = None,
+        compressed: bool = True,
+) -> Path:
+    """
+    Enregistre une solution numérique au format NPZ (NumPy).
+
+    Args:
+        path: Chemin du fichier de sortie.
+        x: Coordonnées spatiales.
+        times: Instants temporels.
+        U: Matrice de la solution (temps x espace).
+        metadata: Métadonnées optionnelles (dictionnaire).
+        compressed: Si True, utilise la compression NPZ.
+
+    Returns:
+        Path: Chemin vers le fichier sauvegardé.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    metadata_json = json.dumps(metadata or {})
+
+    if compressed:
+        np.savez_compressed(
+            path,
+            x=np.asarray(x, dtype=float),
+            times=np.asarray(times, dtype=float),
+            U=np.asarray(U, dtype=float),
+            metadata=metadata_json,
+        )
+    else:
+        np.savez(
+            path,
+            x=np.asarray(x, dtype=float),
+            times=np.asarray(times, dtype=float),
+            U=np.asarray(U, dtype=float),
+            metadata=metadata_json,
+        )
+
+    return path
+
+
+def load_solution_npz(
+        path: str | Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    """
+    Charge une solution numérique depuis un fichier NPZ.
+
+    Args:
+        path: Chemin du fichier NPZ.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]: 
+            (x, times, U, metadata)
+    """
+    data = np.load(path, allow_pickle=False)
+
+    x = data["x"]
+    times = data["times"]
+    U = data["U"]
+    metadata = json.loads(data["metadata"].decode("utf-8")) if "metadata" in data else {}
+
+    return x, times, U, metadata
+
+
+def save_solution_npy(
+        path: str | Path,
+        U: np.ndarray,
+) -> Path:
+    """
+    Enregistre uniquement la matrice de solution au format NPY.
+
+    Args:
+        path: Chemin du fichier de sortie.
+        U: Matrice de la solution.
+
+    Returns:
+        Path: Chemin vers le fichier sauvegardé.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    np.save(path, np.asarray(U, dtype=float))
+
+    return path
+
+
+def load_solution_npy(
+        path: str | Path,
+) -> np.ndarray:
+    """
+    Charge une solution depuis un fichier NPY.
+
+    Args:
+        path: Chemin du fichier NPY.
+
+    Returns:
+        np.ndarray: La matrice de solution U.
+    """
+    return np.load(path, allow_pickle=False)
+
+
+def save_solution_csv_long(
+        path: str | Path,
+        x: np.ndarray,
+        times: np.ndarray,
+        U: np.ndarray,
+        metadata: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """
+    Enregistre la solution au format CSV "long" (tidy data).
+
+    Chaque ligne correspond à un point (x, t, U).
+
+    Args:
+        path: Chemin du fichier CSV.
+        x: Vecteur spatial.
+        times: Vecteur temporel.
+        U: Matrice solution (nt, nx).
+        metadata: Métadonnées à inclure comme colonnes constantes.
+
+    Returns:
+        Path: Chemin du fichier créé.
+    """
+    import pandas as pd
+
+    x = np.asarray(x, dtype=float)
+    times = np.asarray(times, dtype=float)
+    U = np.asarray(U, dtype=float)
+
+    if U.shape != (len(times), len(x)):
+        raise ValueError(
+            f"U doit avoir la forme (len(times), len(x)) = {(len(times), len(x))}, "
+            f"mais a la forme {U.shape}."
+        )
+
+    T_grid, X_grid = np.meshgrid(times, x, indexing="ij")
+
+    df = pd.DataFrame(
+        {
+            "x": X_grid.ravel(),
+            "time": T_grid.ravel(),
+            "U": U.ravel(),
+        }
+    )
+
+    if metadata:
+        for key, value in metadata.items():
+            df[key] = value
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    df.to_csv(path, index=False)
+
+    return path
+
+
+def load_solution_csv_long(
+        path: str | Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray,]:
+    """
+    Charge une solution depuis un CSV au format long.
+
+    Args:
+        path: Chemin du fichier CSV.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, np.ndarray]: (x, times, U)
+    """
+    import pandas as pd
+    df = pd.read_csv(path)
+
+    required = {"x", "time", "U"}
+    missing = required.difference(df.columns)
+
+    if missing:
+        raise ValueError(f"Les colonnes suivantes sont manquantes: {missing}")
+
+    times = np.sort(df["time"].unique())
+    x = np.sort(df["x"].unique())
+    U = (
+        df.pivot(index="time", columns="x", values="U")
+        .sort_index(axis=0)
+        .sort_index(axis=1)
+        .values
+    )
+
+    return x, times, U
+
+
+def save_error_table_csv(
+        path: str | Path,
+        rows: List[Dict[str, Any]],
+) -> Path:
+    """
+    Enregistre une table d'erreurs (liste de dictionnaires) en CSV.
+
+    Args:
+        path: Chemin du fichier CSV.
+        rows: Données sous forme de liste de dictionnaires.
+
+    Returns:
+        Path: Chemin du fichier sauvegardé.
+    """
+    import pandas as pd
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    df = pd.DataFrame(rows)
+    df.to_csv(path, index=False)
+
+    return path
+
+
+# =============================================================================
 # Gestion des Grilles de Scans (Analyse de Stabilité)
 # =============================================================================
 
@@ -467,7 +705,17 @@ def compute_stable_ratio(results: List[Dict]) -> float:
 # =============================================================================
 
 def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray | None:
-    """Générique pour calculer le gradient."""
+    """
+    Calcule le gradient spatial d'un vecteur.
+
+    Args:
+        diff: Vecteur de données.
+        dx: Pas spatial.
+        bc_type: Type de conditions aux limites ('dirichlet', 'neumann', 'periodic').
+
+    Returns:
+        np.ndarray | None: Le gradient calculé ou None si type inconnu.
+    """
     if bc_type == "dirichlet":
         # gradient centré (points intérieurs)
         return (diff[2:] - diff[:-2]) / (2 * dx)
@@ -590,14 +838,16 @@ def compute_linf_time_error(
 
 def compute_convergence_orders(error: Dict[str, float],) -> Dict[str, float]:
     """
-    Calcule les ordres de convergence :
-        ordre_N = log(e_{N-1} / e_N) / log(2)
+    Calcule les ordres de convergence à partir d'un dictionnaire d'erreurs.
+
+    L'ordre est calculé comme : ordre_N = log2(e_{N_prev} / e_N) pour un doublement
+    du nombre de points.
 
     Args:
-        errors: dictionnaire {N: erreur_N}
+        error: Dictionnaire {N: valeur_erreur}.
 
     Returns:
-        dictionnaire {N: ordre_N}
+        Dict[str, float]: Dictionnaire {N: ordre_convergence}.
     """
     orders = {}
 
@@ -806,10 +1056,17 @@ def compute_cfl_number(c: float, dt: float, dx: float) -> float:
 
 def check_cfl_info(cfl: float, scheme: str = "explicit") -> str:
     """
-    Retourne un message informatif sur CFL (non décisionnel pour la stabilité).
+    Retourne un message informatif sur le nombre CFL.
 
-    La stabilité des schémas dans ce module est évaluée avec lambda,
-    pas avec CFL.
+    Note : La stabilité dans ce projet est principalement évaluée via
+    le nombre lambda, mais le CFL reste un indicateur physique utile.
+
+    Args:
+        cfl: Nombre de Courant-Friedrichs-Lewy.
+        scheme: Nom du schéma (utilisé pour compatibilité d'API).
+
+    Returns:
+        str: Message informatif formaté.
     """
     _ = scheme  # Conservé pour compatibilité d'API
     return f"CFL = {cfl:.4f} (indicateur physique, stabilité évaluée via lambda)"
@@ -1073,12 +1330,17 @@ def estimate_memory_usage(
 
 def _params_get(params: Any, key: str, default: Any = None) -> Any:
     """
-    Lit un paramètre depuis un dictionnaire ou un objet dataclass/classique.
+    Récupère une valeur de paramètre de manière flexible.
 
-    Permet à print_simulation_summary d'accepter:
-    - dict: params["c"] / params.get("c")
-    - dataclass: WesterveltParams(c=...)
-    - objet classique avec attributs: params.c
+    Supporte les dictionnaires, les dataclasses et les objets classiques.
+
+    Args:
+        params: Objet contenant les paramètres (Mapping, Dataclass ou Object).
+        key: Nom du paramètre à récupérer.
+        default: Valeur par défaut si non trouvé.
+
+    Returns:
+        Any: La valeur du paramètre ou la valeur par défaut.
     """
     if isinstance(params, Mapping):
         return params.get(key, default)

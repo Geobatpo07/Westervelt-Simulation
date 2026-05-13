@@ -1,11 +1,8 @@
 """
 Package d'utilitaires pour le projet Westervelt Simulation.
 
-Contient toutes les fonctions utilitaires pour:
-- Gestion des fichiers et versioning des figures
-- Analyse de stabilité et des grilles de scans
-- Validation numérique et analyse des schémas
-- Utilitaires mathématiques et matplotlib
+Contient des outils pour la gestion de fichiers, le versionnage, l'analyse
+de stabilité, la validation numérique et la visualisation.
 """
 
 from utils.utils import (
@@ -22,6 +19,15 @@ from utils.utils import (
     save_figure_with_version,
     save_data_with_version,
 
+    # Gestion des solutions
+    save_solution_npz,
+    load_solution_npz,
+    save_solution_npy,
+    load_solution_npy,
+    save_solution_csv_long,
+    load_solution_csv_long,
+    save_error_table_csv,
+
     # Gestion des scans
     build_scan_grid,
     get_scan_axes,
@@ -29,6 +35,9 @@ from utils.utils import (
 
     # Utilitaires mathématiques
     compute_error_metrics,
+    compute_gradient,
+    compute_linf_time_error,
+    compute_convergence_orders,
     normalize_array,
 
     # Matplotlib
@@ -68,6 +77,13 @@ __all__ = [
     "get_next_version",
     "save_figure_with_version",
     "save_data_with_version",
+    "save_solution_npz",
+    "load_solution_npz",
+    "save_solution_npy",
+    "load_solution_npy",
+    "save_solution_csv_long",
+    "load_solution_csv_long",
+    "save_error_table_csv",
 
     # Gestion des scans
     "build_scan_grid",
@@ -76,6 +92,9 @@ __all__ = [
 
     # Utilitaires mathématiques
     "compute_error_metrics",
+    "compute_gradient",
+    "compute_linf_time_error",
+    "compute_convergence_orders",
     "normalize_array",
 
     # Matplotlib
