@@ -165,6 +165,10 @@ class WesterveltSolver:
         elif profile_type == "gaussian_derivative":
             profile = (self.x - mu) * np.exp(-((self.x - mu) ** 2) / (2.0 * sigma ** 2))
 
+        elif profile_type == "gaussian_zero_mean":
+            g = np.exp(-((self.x - mu) ** 2) / (2.0 * sigma ** 2))
+            profile = g - np.mean(g)
+
         elif profile_type == "uniform":
             profile = np.random.uniform(-0.1, 0.1, self.param.nx)
 
@@ -223,6 +227,7 @@ class WesterveltSolver:
             return source(self.x, t)
 
         return source
+
 
     def step(self, source=None):
         """Effectue une étape de temps selon le schéma choisi."""

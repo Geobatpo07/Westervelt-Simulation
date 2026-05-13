@@ -21,7 +21,7 @@ from core.validation import (
     convergence_study_manufactured,
     print_convergence_table,
     run_manufactured_case,
-    compute_manufatured_errors,
+    compute_manufactured_errors,
 )
 from core.solver import WesterveltParams
 from utils import save_figure_with_version
@@ -124,7 +124,7 @@ def plot_pointwise_error(x, U_num, U_ref, t_index, mode='save', metadata=None):
     return finalize_figure(fig, 'nikolic_case_final_error', mode=mode, metadata=metadata)
 
 
-def main(mode='save', verbose=True):
+def main(mode='show', verbose=True):
     """
     Run the manufactured solution validation study with Nikolic parameters.
 
@@ -278,7 +278,7 @@ def main(mode='save', verbose=True):
     x = res['x']
     times_returned = res['times']
 
-    snapshot_errors = compute_manufatured_errors(U_num, U_ref, results['mesh_sizes'][Nmid], bc_type='dirichlet')
+    snapshot_errors = compute_manufactured_errors(U_num, U_ref, results['mesh_sizes'][Nmid], bc_type='dirichlet')
 
     if verbose:
         print(f"\nSnapshots requested: {times_to_plot}")

@@ -13,7 +13,7 @@ from core.validation import (
     make_manufactured_source,
     evaluate_exact_solution,
     run_manufactured_case,
-    compute_manufatured_errors,
+    compute_manufactured_errors,
     convergence_study_manufactured,
     print_convergence_table,
 )
@@ -85,7 +85,7 @@ class TestManufacturedValidation(unittest.TestCase):
     def test_compute_manufatured_errors_returns_metrics(self):
         params = WesterveltParams(c=1500.0, dx=0.05, dt=1e-5, nx=21, nt=5, bc='dirichlet')
         res = run_manufactured_case(params, self.funcs, self.A, self.L, self.omega, self.gamma, self.kappa, store_energy=False)
-        errs = compute_manufatured_errors(res['U_num'], res['U_ref'], params.dx, bc_type='dirichlet')
+        errs = compute_manufactured_errors(res['U_num'], res['U_ref'], params.dx, bc_type='dirichlet')
         # expect the keys to be present and numeric
         for key in ['Linf_L2', 'Linf_H1', 'Linf_grad', 'Linf_Linf']:
             self.assertIn(key, errs)
