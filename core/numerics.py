@@ -4,38 +4,92 @@ import numpy as np
 
 
 def _laplacian(u, i, dx2):
-    """Laplacien 1D centré au point i."""
+    """
+    Laplacien 1D centré au point i.
+
+    Args:
+        u (np.ndarray): Champ scalaire.
+        i (int): Indice du point.
+        dx2 (float): Carré du pas d'espace.
+
+    Returns:
+        float: Valeur du laplacien au point i.
+    """
     return (u[i + 1] - 2.0 * u[i] + u[i - 1]) / dx2
 
 
 def _laplacian_all(u, dx2):
-    """Laplacien centré sur tout le domaine (bords laissés à 0)."""
+    """
+    Laplacien centré sur tout le domaine (bords laissés à 0).
+
+    Args:
+        u (np.ndarray): Champ scalaire.
+        dx2 (float): Carré du pas d'espace.
+
+    Returns:
+        np.ndarray: Vecteur contenant le laplacien en chaque point.
+    """
     out = np.zeros_like(u)
     out[1:-1] = (u[2:] - 2.0 * u[1:-1] + u[:-2]) / dx2
     return out
 
 
 def _spatial_derivative(u, i, dx):
-    """D_x^- u^n au point i."""
+    """
+    Dérivée spatiale centrée au point i.
+
+    Args:
+        u (np.ndarray): Champ scalaire.
+        i (int): Indice du point.
+        dx (float): Pas d'espace.
+
+    Returns:
+        float: Valeur de la dérivée au point i.
+    """
     return (u[i + 1] - u[i - 1]) / (2.0 * dx)
 
 
 def _spatial_derivative_all(u, dx):
-    """D_x^- u^n. (bords laissés à 0)"""
+    """
+    Dérivée spatiale centrée sur tout le domaine (bords laissés à 0).
+
+    Args:
+        u (np.ndarray): Champ scalaire.
+        dx (float): Pas d'espace.
+
+    Returns:
+        np.ndarray: Vecteur contenant la dérivée en chaque point.
+    """
     out = np.zeros_like(u)
     out[1:-1] = (u[2:] - u[:-2]) / (2.0 * dx)
     return out
 
 
 def _time_derivative(u, u_prev, dt):
-    """D_t^- u^n."""
+    """
+    Dérivée temporelle rétrograde au premier ordre.
+
+    Args:
+        u (np.ndarray): Champ à l'instant t.
+        u_prev (np.ndarray): Champ à l'instant t - dt.
+        dt (float): Pas de temps.
+
+    Returns:
+        np.ndarray: Vecteur contenant la dérivée temporelle.
+    """
     return (u - u_prev) / dt
 
 
 def _safe_denominator(denom, eps=1e-12):
     """
-    Régularisation purement numérique pour éviter une division machine par 0.
-    Ne remplace pas un test de non-dégénérescence mathématique.
+    Régularisation purement numérique pour éviter une division par zéro.
+
+    Args:
+        denom (np.ndarray): Dénominateur à régulariser.
+        eps (float): Seuil de régularisation (défaut: 1e-12).
+
+    Returns:
+        np.ndarray: Dénominateur régularisé.
     """
     safe = denom.copy()
     mask = np.abs(safe) < eps
@@ -44,7 +98,17 @@ def _safe_denominator(denom, eps=1e-12):
 
 
 def _check_nondegeneracy(u, k, tol=1e-12):
-    """Vérifie que 1 - 2k u > 0 pour éviter une dégénérescence mathématique."""
+    """
+    Vérifie que 1 - 2k u > 0 pour éviter une dégénérescence mathématique.
+
+    Args:
+        u (np.ndarray): Champ scalaire.
+        k (float): Paramètre de non-linéarité.
+        tol (float): Tolérance pour la vérification (défaut: 1e-12).
+
+    Returns:
+        dict: Résultat de la vérification contenant 'min_denom' et 'nondegenerate'.
+    """
     denom = 1.0 - 2.0 * k * u
     min_denom = float(np.min(denom))
     return {
@@ -55,11 +119,14 @@ def _check_nondegeneracy(u, k, tol=1e-12):
 
 def _apply_boundary(u, bc_type):
     """
-    Applique les conditions aux limites.
+    Applique les conditions aux limites (Dirichlet ou Neumann).
 
-    bc_type:
-        0: Dirichlet homogène (u=0)
-        1: Neumann homogène (du/dx=0)
+    Args:
+        u (np.ndarray): Champ à modifier en place.
+        bc_type (int): Type de condition (0: Dirichlet, 1: Neumann).
+
+    Raises:
+        ValueError: Si bc_type n'est ni 0 ni 1.
     """
     if bc_type == 0:
         u[0] = 0.0
@@ -73,8 +140,19 @@ def _apply_boundary(u, bc_type):
 
 def update_F(F_n, u_n, dt, dx, c, bc_type, source=None):
     """
-    Mise à jour :
-        F^{n+1} = F^n + dt * (c^2 Δu^n + source)
+    Mise à jour de la variable auxiliaire F: F^{n+1} = F^n + dt * (c^2 Δu^n + source).
+
+    Args:
+        F_n (np.ndarray): Valeur de F à l'instant n.
+        u_n (np.ndarray): Valeur de u à l'instant n.
+        dt (float): Pas de temps.
+        dx (float): Pas d'espace.
+        c (float): Vitesse de l'onde.
+        bc_type (int): Type de condition aux limites.
+        source (np.ndarray, optional): Terme source.
+
+    Returns:
+        np.ndarray: Nouvelle valeur F^{n+1}.
     """
     dx2 = dx ** 2
     c2 = c ** 2
@@ -94,7 +172,24 @@ def update_F(F_n, u_n, dt, dx, c, bc_type, source=None):
 
 
 def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
-    """Assemble le système tri-diagonal du schéma semi-implicite pour u^{n+1}."""
+    """
+    Assemble le système tri-diagonal du schéma semi-implicite pour u^{n+1}.
+
+    Args:
+        u_n (np.ndarray): Champ à l'instant n.
+        F_next (np.ndarray): Variable auxiliaire à l'instant n+1.
+        dt (float): Pas de temps.
+        dx (float): Pas d'espace.
+        b (float): Paramètre de diffusion.
+        k (float): Paramètre de non-linéarité.
+        bc_type (int): Type de condition aux limites.
+
+    Returns:
+        tuple: (inférieure, diagonale, supérieure, second membre) du système tri-diagonal.
+
+    Raises:
+        ValueError: Si nx < 3 ou si bc_type est invalide.
+    """
     nx = u_n.shape[0]
     denom = _safe_denominator(1.0 - 2.0 * k * u_n)
     rhs_full = u_n + dt * F_next / denom
@@ -124,7 +219,21 @@ def assemble_semi_implicit_system(u_n, F_next, dt, dx, b, k, bc_type):
 
 
 def solve_tridiagonal(lower, diag, upper, rhs):
-    """Solveur de Thomas pour matrice tri-diagonale."""
+    """
+    Solveur de Thomas pour matrice tri-diagonale.
+
+    Args:
+        lower (np.ndarray): Diagonale inférieure (taille n-1).
+        diag (np.ndarray): Diagonale principale (taille n).
+        upper (np.ndarray): Diagonale supérieure (taille n-1).
+        rhs (np.ndarray): Second membre (taille n).
+
+    Returns:
+        np.ndarray: Solution du système.
+
+    Raises:
+        ZeroDivisionError: Si un pivot est nul.
+    """
     n = diag.size
     c_prime = np.zeros(n - 1, dtype=diag.dtype)
     d_prime = np.zeros(n, dtype=rhs.dtype)
@@ -154,7 +263,19 @@ def solve_tridiagonal(lower, diag, upper, rhs):
 
 
 def compute_energy(u, u_prev, c, dt, dx):
-    """Energie discrète: 0.5 * int((u_t)^2 + c^2 (u_x)^2) dx."""
+    """
+    Calcule l'énergie discrète totale: 0.5 * int((u_t)^2 + c^2 (u_x)^2) dx.
+
+    Args:
+        u (np.ndarray): Champ à l'instant n.
+        u_prev (np.ndarray): Champ à l'instant n-1.
+        c (float): Vitesse de l'onde.
+        dt (float): Pas de temps.
+        dx (float): Pas d'espace.
+
+    Returns:
+        float: Énergie totale du système.
+    """
     ut = _time_derivative(u, u_prev, dt)
     ux = _spatial_derivative_all(u, dx)
     return 0.5 * dx * np.sum(ut**2 + c**2 * ux**2)

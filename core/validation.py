@@ -1,16 +1,45 @@
 # ./core/validation.py
 
+"""
+Outils de validation numérique pour le projet Westervelt Simulation.
+
+Fournit des fonctionnalités pour:
+- La génération de grilles spatio-temporelles.
+- La validation par méthode des solutions fabriquées (MMS).
+- Les études de convergence par raffinement de maillage (H-refinement).
+- Le calcul et l'affichage de tables d'erreurs et d'ordres de convergence.
+"""
+
 import numpy as np
+import pandas as pd
 from typing import Dict, Any, Tuple, Callable, List, Optional, Iterable
+
 
 from core.numerics import _apply_boundary
 from core.solver import WesterveltSolver, WesterveltParams
-from utils import validate_shape
-from utils.utils import compute_linf_time_error, compute_convergence_orders
+from utils import (
+    compute_linf_time_error,
+    compute_error_metrics,
+    compute_convergence_orders,
+    save_error_table_csv,
+    save_solution_npz,
+    load_solution_npz,
+)
 
 
 def make_time_grid(T: float, dt: float) -> np.ndarray:
-    """Crée une grille temporelle de 0 à T avec un pas de dt ajusté pour que T soit un multiple de dt."""
+    """
+    Crée une grille temporelle uniforme ajustée.
+
+    Ajuste le pas de temps pour que le temps final T soit un multiple exact de dt.
+
+    Args:
+        T: Temps final (s).
+        dt: Pas de temps cible (s).
+
+    Returns:
+        np.ndarray: Vecteur des instants temporels de 0 à T.
+    """
     nt = int(np.ceil(T / dt))
     dt_adjusted = T / nt
 
@@ -18,17 +47,45 @@ def make_time_grid(T: float, dt: float) -> np.ndarray:
 
 
 def make_spatial_grid(L: float, nx: int) -> np.ndarray:
-    """Crée une grille spatiale de 0 à L avec nx points."""
+    """
+    Crée une grille spatiale uniforme.
+
+    Args:
+        L: Longueur du domaine (m).
+        nx: Nombre de points spatiaux.
+
+    Returns:
+        np.ndarray: Vecteur des coordonnées spatiales de 0 à L.
+    """
     return np.linspace(0.0, L, nx)
 
 
 def nx_from_level(N: int) -> int:
-    """Calcule le nombre de points spatiaux nx à partir du niveau de raffinement N."""
+    """
+    Calcule le nombre de points nx à partir d'un niveau de raffinement.
+
+    La formule utilisée est nx = 100 * 2^(N-1) + 1.
+
+    Args:
+        N: Niveau de raffinement (1, 2, 3, ...).
+
+    Returns:
+        int: Nombre de points correspondants.
+    """
     return 100 * 2 ** (N - 1) + 1
 
 
 def nx_from_mesh_size(dx: float, L: float) -> int:
-    """Calcule le nombre de points spatiaux nx à partir du pas spatial dx pour un domaine de longueur L."""
+    """
+    Calcule le nombre de points nx à partir du pas spatial dx.
+
+    Args:
+        dx: Pas spatial (m).
+        L: Longueur totale (m).
+
+    Returns:
+        int: Nombre de points requis pour couvrir L avec un pas dx.
+    """
     return int(np.ceil(L / dx)) + 1
 
 # ------------------------------------------------------------------------------------------------------------------------
@@ -37,14 +94,28 @@ def nx_from_mesh_size(dx: float, L: float) -> int:
 
 def initialize_manufactured_solver(
         solver: WesterveltSolver,
-        funcs: Dict[str, callable],
+        funcs: Dict[str, Callable],
         A: float,
         L: float,
         omega: float,
         gamma: float,
         kappa: float,
 ) -> None:
-    """Initialise le solveur avec la solution fabriquée à t=0 et sa dérivée temporelle."""
+    """
+    Initialise le solveur pour une solution fabriquée.
+
+    Définit u(t=0) et calcule u(t=-dt) pour initialiser le schéma à deux pas
+    en utilisant la dérivée temporelle exacte à t=0.
+
+    Args:
+        solver: Instance du solveur à initialiser.
+        funcs: Dictionnaire contenant les fonctions 'u' et 'ut' exactes.
+        A: Amplitude de la solution.
+        L: Paramètre spatial de la solution.
+        omega: Pulsation angulaire.
+        gamma: Paramètre de forme temporelle.
+        kappa: Paramètre de forme spatiale.
+    """
     c = solver.param.c
     b = solver.param.b
     k = solver.param.k
@@ -70,7 +141,7 @@ def initialize_manufactured_solver(
 
 
 def make_manufactured_source(
-        funcs: Dict[str, callable],
+        funcs: Dict[str, Callable],
         A: float,
         L: float,
         omega: float,
@@ -79,18 +150,34 @@ def make_manufactured_source(
         c: float,
         b: float,
         k: float,
-):
-    """Crée une fonction source f(x, t) à partir de la solution fabriquée."""
+) -> Callable:
+    """
+    Crée une fonction source f(t, x) pour la solution fabriquée.
+
+    Args:
+        funcs: Dictionnaire contenant la fonction de source 'f'.
+        A: Amplitude.
+        L: Paramètre L.
+        omega: Pulsation.
+        gamma: Paramètre gamma.
+        kappa: Paramètre kappa.
+        c: Vitesse du son.
+        b: Paramètre de viscosité.
+        k: Paramètre de non-linéarité.
+
+    Returns:
+        Callable: Fonction f(t, x) prête à être utilisée par le solveur.
+    """
     f = funcs['f']
 
-    def source(x, t):
+    def source(t, x):
         return f(x, t, A, L, omega, gamma, kappa, c, b, k)
 
     return source
 
 
 def evaluate_exact_solution(
-        funcs: Dict[str, callable],
+        funcs: Dict[str, Callable],
         x: np.ndarray,
         times: np.ndarray,
         A: float,
@@ -102,7 +189,19 @@ def evaluate_exact_solution(
         b: float,
         k: float,
 ) -> np.ndarray:
-    """Évalue la solution exacte u(x, t) à partir de la fonction fabriquée."""
+    """
+    Évalue la solution exacte sur une grille spatio-temporelle.
+
+    Args:
+        funcs: Dictionnaire contenant la fonction 'u' exacte.
+        x: Grille spatiale.
+        times: Grille temporelle.
+        A, L, omega, gamma, kappa: Paramètres de la solution.
+        c, b, k: Paramètres physiques.
+
+    Returns:
+        np.ndarray: Matrice (nt, nx) contenant la solution exacte.
+    """
     u_exact = funcs['u']
 
     return np.array([u_exact(x, t, A, L, omega, gamma, kappa, c, b, k) for t in times])
@@ -110,7 +209,7 @@ def evaluate_exact_solution(
 
 def run_manufactured_case(
         params: WesterveltParams,
-        funcs: Dict[str, callable],
+        funcs: Dict[str, Callable],
         A: float,
         L: float,
         omega: float,
@@ -120,15 +219,26 @@ def run_manufactured_case(
         store_energy: bool = False,
 ) -> Dict[str, Any]:
     """
-    Lance une simulation forcée par la source fabriquée.
+    Exécute une simulation complète avec une solution fabriquée.
 
-    Retourne :
-        - solver
-        - x
-        - times
-        - U_num
-        - U_ref
-        - snapshots
+    Lance le solveur avec une source forcée et compare le résultat numérique
+    avec la solution analytique.
+
+    Args:
+        params: Paramètres de la simulation.
+        funcs: Dictionnaire des fonctions analytiques ('u', 'ut', 'f').
+        A, L, omega, gamma, kappa: Paramètres de la solution fabriquée.
+        times_to_save: Instants auxquels sauvegarder la solution (optionnel).
+        store_energy: Si True, enregistre l'évolution de l'énergie.
+
+    Returns:
+        Dict[str, Any]: Dictionnaire contenant:
+            - 'solver': Instance du solveur.
+            - 'x': Grille spatiale.
+            - 'times': Grille temporelle.
+            - 'U_num': Solution numérique (nt, nx).
+            - 'U_ref': Solution exacte (nt, nx).
+            - 'snapshots': Dictionnaire des snapshots.
     """
     solver = WesterveltSolver(params)
 
@@ -163,6 +273,18 @@ def compute_manufactured_errors(
         dx: float,
         bc_type: str = "dirichlet",
 ) -> Dict[str, float]:
+    """
+    Calcule les métriques d'erreur pour une solution fabriquée.
+
+    Args:
+        U_num: Solution numérique.
+        U_ref: Solution de référence.
+        dx: Pas spatial.
+        bc_type: Conditions aux limites.
+
+    Returns:
+        Dict[str, float]: Erreurs Linf en temps pour diverses normes spatiales (L2, H1, grad, Linf).
+    """
     return {
         "Linf_L2": compute_linf_time_error(
             U_num, U_ref, dx, norm_type="L2", bc_type=bc_type
@@ -179,8 +301,40 @@ def compute_manufactured_errors(
     }
 
 
+def compute_manufactured_error_norm_over_time(
+        U_num: np.ndarray,
+        U_ref: np.ndarray,
+        dx: float,
+        norm_type: str = "L2",
+        bc_type: str = "dirichlet",
+) -> np.ndarray:
+    values = []
+
+    for u_num, u_ref in zip(U_num, U_ref):
+        metrics = compute_error_metrics(
+            u_num,
+            u_ref,
+            dx=dx,
+            compute_l2=(norm_type == "L2"),
+            compute_h1=(norm_type == "H1"),
+            compute_linf=(norm_type == "Linf"),
+            bc_type=bc_type,
+        )
+
+        if norm_type == "grad":
+            diff = u_num - u_ref
+            grad = (diff[2:] - diff[:-2]) / (2.0 * dx)
+            value = np.sqrt(dx * np.sum(grad**2))
+        else:
+            value = metrics[norm_type]
+
+        values.append(value)
+
+    return np.asarray(values)
+
+
 def convergence_study_manufactured(
-        funcs: Dict[str, callable],
+        funcs: Dict[str, Callable],
         levels: Iterable[int],
         L: float = 1.0,
         T: float = 1e-4,
@@ -198,11 +352,24 @@ def convergence_study_manufactured(
         dt_factor: float = 0.2,
 ) -> Dict[str, Any]:
     """
-    Étude de convergence avec solution fabriquée.
+    Réalise une étude de convergence complète (MMS).
 
-    levels:
-        niveaux de raffinement N.
-        nx = base_nx * 2**N + 1
+    Exécute la simulation pour plusieurs niveaux de raffinement et calcule
+    les erreurs et les ordres de convergence.
+
+    Args:
+        funcs: Fonctions de la solution fabriquée.
+        levels: Liste des niveaux de raffinement N.
+        L, T: Paramètres du domaine.
+        c, rho0, beta, mu_v: Paramètres physiques.
+        A, omega, gamma, kappa: Paramètres de la solution.
+        scheme: Schéma numérique.
+        base_nx: Nombre de points de base pour nx.
+        dt_mode: 'cfl' ou 'quadratic'.
+        dt_factor: Facteur de sécurité pour dt.
+
+    Returns:
+        Dict[str, Any]: Résultats complets incluant erreurs, ordres et cas individuels.
     """
     errors_L2 = {}
     errors_H1 = {}
@@ -280,8 +447,45 @@ def convergence_study_manufactured(
     }
 
 
+def build_manufactured_convergence_table(results: Dict[str, Any],) -> pd.DataFrame:
+    """
+    Construit un DataFrame pandas récapitulant les erreurs et ordres de convergence.
+
+    Args:
+        results: Dictionnaire issu de `convergence_study_manufactured`.
+
+    Returns:
+        pd.DataFrame: Tableau contenant N, dx, dt, les erreurs et les ordres pour chaque métrique.
+    """
+    rows = []
+
+    levels = sorted(results["errors_L2"].keys())
+
+    for N in levels:
+        rows.append({
+            "N": N,
+            "dx": results["mesh_sizes"][N],
+            "dt": results["time_steps"][N],
+            "Linf_L2": results["errors_L2"][N],
+            "order_Linf_L2": results["orders_L2"].get(N, np.nan),
+            "Linf_H1": results["errors_H1"][N],
+            "order_Linf_H1": results["orders_H1"].get(N, np.nan),
+            "Linf_grad": results["errors_grad"][N],
+            "order_Linf_grad": results["orders_grad"].get(N, np.nan),
+            "Linf_Linf": results["errors_Linf"][N],
+            "order_Linf_Linf": results["orders_Linf"].get(N, np.nan),
+        })
+
+    return pd.DataFrame(rows)
+
+
 def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
-    """Affiche un tableau simple des erreurs et ordres."""
+    """
+    Affiche un tableau formaté des erreurs et ordres de convergence (MMS).
+
+    Args:
+        results: Dictionnaire issu de `convergence_study_manufactured`.
+    """
 
     errors_L2 = results["errors_L2"]
     errors_H1 = results["errors_H1"]
@@ -335,58 +539,164 @@ def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
 # VALIDATION PAR RAFFINEMENT DU MAILLAGE
 # ------------------------------------------------------------------------------------------------------------------------
 
-def interpolate_solution_time(x_coarse, U_coarse, x_ref):
-    x_coarse = np.asarray(x_coarse, dtype=float)
-    U_coarse = np.asarray(U_coarse, dtype=float)
-    x_ref = np.asarray(x_ref, dtype=float)
+def check_nested_grids(
+        nx_coarse: int,
+        nt_coarse: int,
+        nx_fine: int,
+        nt_fine: int,
+) -> Tuple[int, int]:
+    """
+    Vérifie que deux grilles sont imbriquées.
 
-    U_interp = np.empty((U_coarse.shape[0], x_ref.size), dtype=float)
+    Args:
+        nx_coarse: Nombre de points spatiaux de la grille grossière.
+        nt_coarse: Nombre d'itérations temporelles de la grille grossière.
+        nx_fine: Nombre de points de la grille fine.
+        nt_fine: Nombre d'itérations de la grille fine.
 
-    for n in range(U_coarse.shape[0]):
-        U_interp[n] = np.interp(x_ref, x_coarse, U_coarse[n])
+    Returns:
+        Tuple[int, int]: (ratio_nx, ratio_nt) entre les deux grilles.
 
-    return U_interp
+    Raises:
+        ValueError: Si les grilles ne sont pas imbriquées.
+    """
+    if nx_coarse < 2 or nx_fine < 2:
+        raise ValueError("nx_coarse et nx_fine doivent être au moins égaux à 2.")
+
+    if nt_coarse < 1 or nt_fine < 1:
+        raise ValueError("nt_coarse et nt_fine doivent être au moins égaux à 1.")
+
+    if (nx_fine - 1) % (nx_coarse - 1) != 0:
+        raise ValueError(
+            f"Grilles spatiales non imbriquées : "
+            f"nx_fine-1={nx_fine - 1} n'est pas un multiple de "
+            f"nx_coarse-1={nx_coarse - 1}."
+        )
+
+    if nt_fine % nt_coarse != 0:
+        raise ValueError(
+            f"Grilles temporelles non imbriquées : "
+            f"nt_fine={nt_fine} n'est pas un multiple de nt_coarse={nt_coarse}."
+        )
+
+    return (nx_fine - 1) // (nx_coarse - 1), nt_fine // nt_coarse
 
 
-def interpolate_solution_space_time(x_coarse, U_coarse, x_ref, t_coarse, t_ref):
-    U_space = interpolate_solution_time(x_coarse, U_coarse, x_ref)
+def restrict_fine_to_coarse(
+        U_fine: np.ndarray,
+        nx_coarse: int,
+        nt_coarse: int,
+        nx_fine: int,
+        nt_fine: int,
+) -> np.ndarray:
+    """
+    Restreint une solution d'une grille fine vers une grille grossière.
 
-    U_interp = np.empty((len(t_ref), len(x_ref)), dtype=float)
+    Args:
+        U_fine: Solution sur grille fine.
+        nx_coarse, nt_coarse: Dimensions cibles.
+        nx_fine, nt_fine: Dimensions sources.
 
-    for j in range(len(x_ref)):
-        U_interp[:,j] = np.interp(t_ref, t_coarse, U_space[:,j])
+    Returns:
+        np.ndarray: Solution restreinte.
+    """
+    ratio_nx, ratio_nt = check_nested_grids(nx_coarse, nt_coarse, nx_fine, nt_fine)
 
-    return U_interp
+    return U_fine[::ratio_nt, ::ratio_nx]
 
 
-def run_case(
-        N: int,
-        scheme: str = 'explicit',
+def compute_relative_linf_l2_error(
+        U_coarse: np.ndarray,
+        U_fine_restricted: np.ndarray,
+        dx: float,
+        eps: float = 1e-14,
+) -> float:
+    error = U_coarse - U_fine_restricted
+
+    err_l2_t = np.sqrt(np.sum(error ** 2, axis=1))
+    ref_l2_t = np.sqrt(np.sum(U_fine_restricted ** 2, axis=1))
+
+    return np.max(err_l2_t / (ref_l2_t + eps))
+
+def compute_refinement_error(
+        U_coarse: np.ndarray,
+        U_fine_restricted: np.ndarray,
+        dx: float,
+        bc_type: str = "dirichlet",
+) -> Dict[str, float]:
+    """
+    Calcule l'erreur entre une solution grossière et une solution fine restreinte.
+
+    Args:
+        U_coarse: Solution calculée sur grille grossière.
+        U_fine_restricted: Solution fine restreinte à la grille grossière.
+        dx: Pas spatial.
+        bc_type: Type de conditions aux limites.
+
+    Returns:
+        Dict[str, float]: Dictionnaire des erreurs.
+    """
+    return {
+        "Linf_L2": compute_linf_time_error(
+            U_coarse, U_fine_restricted, dx, norm_type="L2", bc_type=bc_type
+        ),
+        "Linf_rel_L2": compute_relative_linf_l2_error(
+            U_coarse, U_fine_restricted, dx,
+        ),
+        "Linf_H1": compute_linf_time_error(
+            U_coarse, U_fine_restricted, dx, norm_type="H1", bc_type=bc_type
+        ),
+        "Linf_grad": compute_linf_time_error(
+            U_coarse, U_fine_restricted, dx, norm_type="grad", bc_type=bc_type
+        ),
+        "Linf_Linf": compute_linf_time_error(
+            U_coarse, U_fine_restricted, dx, norm_type="Linf", bc_type=bc_type
+        ),
+    }
+
+
+def run_case_direct(
+        nx: int,
+        nt: int,
+        T_final: float = 37e-6,
         L: float = 0.2,
-        T: float = 37e-6,
-        nt: int = 2000
+        c: float = 1500.0,
+        rho0: float = 1000.0,
+        beta: float = 3.5,
+        mu_v: float = 6e-6,
+        A1: float = 1.2e8,
+        A2: float = 1.0e11,
+        scheme: str = "semi_implicit",
+        bc: str = "dirichlet",
+        store_energy: bool = False,
 ) -> Dict[str, Any]:
-    nx = nx_from_level(N)
-    dx = L / (nx - 1)
+    """
+    Exécute un cas de simulation direct avec des paramètres spécifiés.
 
-    if scheme in ('explicit', 'semi_implicit'):
-        cfl = 0.5
-        dt = cfl * dx / 1500.0
-        nt = int(np.ceil(T / dt))
-        dt = T / nt
-    else:
-        dt = T / nt
+    Args:
+        nx, nt: Nombre de points spatiaux et temporels.
+        T_final, L: Paramètres du domaine.
+        c, rho0, beta, mu_v: Paramètres physiques.
+        scheme: Schéma numérique.
+        bc: Conditions aux limites.
+        store_energy: Enregistrer l'énergie.
+
+    Returns:
+        Dict[str, Any]: Dictionnaire contenant les résultats et paramètres du cas.
+    """
+    dx = L / (nx - 1)
+    dt = T_final / nt
 
     params = WesterveltParams(
-        c=1500.0,
-        rho0=1000.0,
-        beta=3.5,
-        mu_v=6e-6,      # b = mu_v / rho0 = 6e-9
+        c=c,
+        rho0=rho0,
+        beta=beta,
+        mu_v=mu_v,
         dx=dx,
         dt=dt,
         nx=nx,
         nt=nt,
-        bc="dirichlet",
+        bc=bc,
         scheme=scheme,
     )
 
@@ -394,9 +704,9 @@ def run_case(
 
     solver.initialize(
         u0_type="gaussian",
-        u1_type="gaussian_derivative",
-        A1=1.2e8,
-        A2=-1.0e11,
+        u1_type="gaussian_zero_mean",
+        A1=A1,
+        A2=A2,
         mu=0.1,
         sigma1=0.015,
         sigma2=0.02,
@@ -404,132 +714,288 @@ def run_case(
 
     times = np.arange(nt + 1) * dt
 
-    snapshots = solver.run_with_snapshots(
-        times_to_save=times,
-        store_energy=False,
-    )
+    snapshots = solver.run_with_snapshots(times, store_energy=store_energy)
 
     U = np.array([snapshots[t] for t in times])
 
     return {
-        'solver': solver,
-        'x': solver.x,
-        'times': times,
-        'U': U,
-        'dx': dx,
-        'dt': dt,
-        'nx': nx,
-        'nt': nt,
+        "solver": solver,
+        "params": params,
+        "x": solver.x,
+        "times": times,
+        "U": U,
+        "dx": dx,
+        "dt": dt,
+        "nx": nx,
+        "nt": nt,
+        "T_final": T_final,
+        "L": L,
+        "scheme": scheme,
+        "bc": bc,
     }
 
 
-def reference_solution(
-        N_ref: int = 8,
-        scheme: str = "explicit",
+def refinement_validation_direct(
+        coarse: dict,
+        fine: dict,
+        bc_type: str = "dirichlet",
 ) -> Dict[str, Any]:
-    return run_case(N_ref, scheme=scheme)
+    """
+    Valide une solution grossière par rapport à une solution plus fine.
 
-def convergence_study_ref(
-    levels: Iterable[int] = (1, 2, 3, 4, 5, 6),
-    N_ref: int = 8,
-    scheme: str = "explicit",
-) -> Dict[str, Any]:
-    ref = reference_solution(N_ref, scheme=scheme)
+    Réalise la restriction de la solution fine et calcule les erreurs de différence.
 
-    x_ref = ref['x']
-    U_ref = ref['U']
-    dx = ref['dx']
+    Args:
+        coarse: Dictionnaire de résultats du cas grossier.
+        fine: Dictionnaire de résultats du cas fin (référence).
+        bc_type: Type de conditions aux limites.
 
-    errors_L2 = {}
-    errors_H1 = {}
-    errors_grad = {}
-    errors_Linf = {}
-    cases = {}
+    Returns:
+        Dict[str, Any]: Comparaison détaillée incluant les erreurs.
+    """
+    U_fine_restricted = restrict_fine_to_coarse(
+        U_fine=fine["U"],
+        nx_coarse=coarse["nx"],
+        nt_coarse=coarse["nt"],
+        nx_fine=fine["nx"],
+        nt_fine=fine["nt"],
+    )
 
-    for N in levels:
-        case = run_case(N, scheme=scheme)
-
-        U_interp = interpolate_solution_space_time(
-            case['x'], case['U'], x_ref, case['times'], ref['times']
+    if coarse['U'].shape != U_fine_restricted.shape:
+        raise ValueError(
+            f"Les solutions ne sont pas comparables après restriction : U_coarse.shape={coarse['U'].shape}, U_fine_restricted.shape={U_fine_restricted.shape}"
         )
 
-        errors_L2[N] = compute_linf_time_error(U_interp, U_ref, dx, norm_type="L2", bc_type="dirichlet")
+    error = coarse['U'] - U_fine_restricted
 
-        errors_H1[N] = compute_linf_time_error(U_interp, U_ref, dx, norm_type="H1", bc_type="dirichlet")
-
-        errors_grad[N] = compute_linf_time_error(U_interp, U_ref, dx, norm_type="grad", bc_type="dirichlet")
-
-        errors_Linf[N] = compute_linf_time_error(U_interp, U_ref, dx, norm_type="Linf", bc_type="dirichlet")
-
-        cases[N] = {
-            **case,
-            "U_interp": U_interp,
-        }
-
-    orders_L2 = compute_convergence_orders(errors_L2)
-    orders_H1 = compute_convergence_orders(errors_H1)
-    orders_grad = compute_convergence_orders(errors_grad)
-    orders_Linf = compute_convergence_orders(errors_Linf)
+    errors = compute_refinement_error(
+        U_coarse=coarse['U'],
+        U_fine_restricted=U_fine_restricted,
+        dx=coarse['dx'],
+        bc_type=bc_type,
+    )
 
     return {
-        "reference": ref,
-        "cases": cases,
-        "errors_L2": errors_L2,
-        "orders_L2": orders_L2,
-        "errors_H1": errors_H1,
-        "orders_H1": orders_H1,
-        "errors_grad": errors_grad,
-        "orders_grad": orders_grad,
-        "errors_Linf": errors_Linf,
-        "orders_Linf": orders_Linf,
+        "U_coarse": coarse['U'],
+        "U_fine_restricted": U_fine_restricted,
+        "error": error,
+        "errors": errors,
     }
 
 
-def print_convergence_table_ref(results: Dict[str, Any]) -> None:
-    """Affiche un tableau simple des erreurs et ordres."""
+def convergence_study_refinement(
+        levels: List[Tuple[int, int]],
+        T_final: float = 37e-6,
+        L_final: float = 0.2,
+        scheme: str = "explicit",
+        bc: str = "dirichlet",
+        store_energy: bool = False,
+) -> Dict[str, Any]:
+    """
+    Réalise une étude de convergence par raffinement successif.
 
-    errors_L2 = results["errors_L2"]
-    errors_H1 = results["errors_H1"]
-    errors_grad = results["errors_grad"]
-    errors_Linf = results["errors_Linf"]
+    Compare chaque niveau de la liste `levels` au niveau suivant le plus fin (ou au dernier).
 
-    orders_L2 = results["orders_L2"]
-    orders_H1 = results["orders_H1"]
-    orders_grad = results["orders_grad"]
-    orders_Linf = results["orders_Linf"]
+    Args:
+        levels: Liste de tuples (nx, nt) à tester.
+        T_final, L_final: Domaine spatio-temporel.
+        scheme: Schéma numérique.
+        bc: Conditions aux limites.
+        store_energy: Enregistrer l'énergie.
 
-    cases = results["cases"]
+    Returns:
+        Dict[str, Any]: Résultats de l'étude de convergence.
+    """
+    cases = {}
 
-    print("\nTable de convergence - raffinement du maillage")
-    print("-" * 132)
-    print(
-        f"{'N':>4} | {'dx':>12} | {'dt':>12} | "
-        f"{'LinfL2':>12} | {'ord':>6} | "
-        f"{'H1':>12} | {'ord':>6} | "
-        f"{'LinfGrad':>12} | {'ord':>6} | "
-        f"{'Linf':>12} | {'ord':>6}"
-    )
-    print("-" * 132)
+    for nx, nt in levels:
+        case = run_case_direct(
+            nx=nx,
+            nt=nt,
+            T_final=T_final,
+            L=L_final,
+            scheme=scheme,
+            bc=bc,
+            store_energy=store_energy,
+        )
+        cases[(nx, nt)] = case
 
-    for N, case in cases.items():
-        o_l2 = orders_L2.get(N, np.nan)
-        o_h1 = orders_H1.get(N, np.nan)
-        o_grad = orders_grad.get(N, np.nan)
-        o_linf = orders_Linf.get(N, np.nan)
+    nx_ref, nt_ref = levels[-1]
+    fine = cases[(nx_ref, nt_ref)]
 
-        print(
-            f"{N:>4} | "
-            f"{case['dx']:>12.4e} | "
-            f"{case['dt']:>12.4e} | "
-            f"{errors_L2[N]:>12.4e} | "
-            f"{o_l2:>6.3f} | "
-            f"{errors_H1[N]:>12.4e} | "
-            f"{o_h1:>6.3f} |"
-            f"{errors_grad[N]:>12.4e} | "
-            f"{o_grad:>6.3f} | "
-            f"{errors_Linf[N]:>12.4e} | "
-            f"{o_linf:>6.3f}"
+    rows = []
+    results = {}
+
+    for nx, nt in levels[:-1]:
+        coarse = cases[(nx, nt)]
+
+        comparison = refinement_validation_direct(
+            coarse=coarse,
+            fine=fine,
+            bc_type=bc,
         )
 
-    print("-" * 132)
+        row = {
+            "nx": nx,
+            "nt": nt,
+            "dx": coarse["dx"],
+            "dt": coarse["dt"],
+            "nx_ref": nx_ref,
+            "nt_ref": nt_ref,
+            **comparison["errors"],
+        }
+
+        rows.append(row)
+        results[(nx, nt)] = comparison
+
+    return {
+        "cases": cases,
+        "reference": fine,
+        "comparisons": results,
+        "rows": rows,
+    }
+
+
+def build_convergence_table_refinement(rows: List[Dict[str, Any]]) -> pd.DataFrame:
+    """
+    Construit un DataFrame pandas récapitulant la convergence.
+
+    Calcule automatiquement les ordres de convergence pour toutes les colonnes d'erreur.
+
+    Args:
+        rows: Liste de dictionnaires (lignes de données).
+
+    Returns:
+        pd.DataFrame: Tableau de convergence avec ordres calculés.
+    """
+    df = pd.DataFrame(rows)
+
+    if df.empty:
+        return df
+
+    df = df.sort_values("dx", ascending=False).reset_index(drop=True)
+
+    error_columns = [col for col in df.columns if col.startswith("Linf")]
+
+    for col in error_columns:
+        error_dict = {
+            row["nx"]: row[col] for _, row in df.iterrows()
+        }
+
+        orders = compute_convergence_orders(error_dict)
+
+        order_values = [orders.get(nx, np.nan) for nx in df["nx"]]
+
+        df[f"order_{col}"] = order_values
+
+    return df
+
+
+def scan_critical_amplitudes(
+        amplitudes,
+        nx: int = 801,
+        nt: int = 1000,
+        scheme: str = "explicit",
+        bc: str = "dirichlet",
+        T_final: float = 37e-6,
+        L: float = 0.2,
+        alpha_tol: float = 1e-12,
+        A2_factor: float = 1e3,
+        stop_after_degeneracy: bool = False,
+) -> pd.DataFrame:
+    """
+    Scanne les amplitudes initiales afin d'évaluer la non-dégénérescence
+    numérique du modèle de Westervelt.
+
+    Pour chaque amplitude A1, on lance une simulation et on calcule
+
+        alpha(t,x) = 1 - 2 k u(t,x).
+
+    Le critère retourné n'est pas une stabilité de Von Neumann. Il indique
+    seulement si la simulation reste dans le régime non dégénéré au sens où
+
+        min_{t,x} alpha(t,x) > alpha_tol.
+
+    Args:
+        amplitudes: suite d'amplitudes A1 à tester.
+        nx, nt: résolution spatiale et temporelle.
+        scheme: schéma numérique utilisé.
+        bc: condition aux limites.
+        T_final, L: domaine spatio-temporel.
+        alpha_tol: marge de non-dégénérescence.
+        A2_factor: rapport A2/A1 pour la vitesse initiale.
+        stop_after_degeneracy: si True, arrête le scan après la première
+            amplitude dégénérée.
+
+    Returns:
+        pd.DataFrame avec A1, A2, alpha_min, alpha_max, umax, non_degenerate.
+    """
+    rows = []
+
+    for A1 in amplitudes:
+        A1 = float(A1)
+        A2 = float(A2_factor * A1)
+
+        try:
+            case = run_case_direct(
+                nx=nx,
+                nt=nt,
+                T_final=T_final,
+                L=L,
+                A1=A1,
+                A2=A2,
+                scheme=scheme,
+                bc=bc,
+            )
+
+            U = case["U"]
+            k = case["params"].k
+
+            finite = bool(np.isfinite(U).all())
+
+            if finite:
+                alpha = 1.0 - 2.0 * k * U
+                alpha_min = float(np.min(alpha))
+                alpha_max = float(np.max(alpha))
+                umax = float(np.max(np.abs(U)))
+                u_at_alpha_min = float(U[np.argmin(alpha)])
+            else:
+                alpha_min = np.nan
+                alpha_max = np.nan
+                umax = np.nan
+                u_at_alpha_min = np.nan
+
+            non_degenerate = finite and alpha_min > alpha_tol
+
+        except Exception as exc:
+            finite = False
+            alpha_min = np.nan
+            alpha_max = np.nan
+            umax = np.nan
+            u_at_alpha_min = np.nan
+            non_degenerate = False
+            error_message = str(exc)
+        else:
+            error_message = ""
+
+        rows.append({
+            "A1": A1,
+            "A2": A2,
+            "alpha_min": alpha_min,
+            "alpha_max": alpha_max,
+            "umax": umax,
+            "u_at_alpha_min": u_at_alpha_min,
+            "finite": finite,
+            "non_degenerate": non_degenerate,
+            "alpha_tol": alpha_tol,
+            "scheme": scheme,
+            "error": error_message,
+        })
+
+        if stop_after_degeneracy and not non_degenerate:
+            break
+
+    return pd.DataFrame(rows)
+
+
 

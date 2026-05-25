@@ -16,6 +16,7 @@ from utils.utils import (
     # Gestion des fichiers et versioning
     ensure_output_dir,
     get_next_version,
+    append_profiler_record_csv,
     save_figure_with_version,
     save_data_with_version,
 
@@ -75,6 +76,7 @@ __all__ = [
     # Gestion des fichiers
     "ensure_output_dir",
     "get_next_version",
+    "append_profiler_record_csv",
     "save_figure_with_version",
     "save_data_with_version",
     "save_solution_npz",

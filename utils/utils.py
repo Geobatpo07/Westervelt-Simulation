@@ -16,10 +16,10 @@ from datetime import datetime
 import json
 import re
 import warnings
-from unittest import result
 
 import numpy as np
 import matplotlib.pyplot as plt
+from aquarel import load_theme
 from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Callable, Optional, Literal, Mapping
 import time
@@ -33,6 +33,12 @@ import functools
 def timer(func: Callable) -> Callable:
     """
     Décorateur qui mesure et affiche le temps d'exécution d'une fonction.
+
+    Args:
+        func: Fonction à décorer.
+
+    Returns:
+        Callable: La fonction wrappée.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -48,6 +54,12 @@ def timer(func: Callable) -> Callable:
 def log_execution(func: Callable) -> Callable:
     """
     Décorateur qui logue l'appel de la fonction avec ses arguments.
+
+    Args:
+        func: Fonction à décorer.
+
+    Returns:
+        Callable: La fonction wrappée.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -68,6 +80,12 @@ def log_execution(func: Callable) -> Callable:
 def deprecated(reason: str) -> Callable:
     """
     Décorateur pour marquer les fonctions comme obsolètes.
+
+    Args:
+        reason: Raison de l'obsolescence et alternative conseillée.
+
+    Returns:
+        Callable: Le décorateur de fonction.
     """
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
@@ -85,7 +103,18 @@ def deprecated(reason: str) -> Callable:
 def validate_shape(func: Callable) -> Callable:
     """
     Décorateur pour valider que les arguments numpy ont des formes compatibles.
-    Vérifie que tous les arrays ont la même forme ou sont scalaires.
+
+    Vérifie que tous les arrays passés en arguments positionnels ont la même forme
+    ou sont des scalaires.
+
+    Args:
+        func: Fonction à décorer.
+
+    Returns:
+        Callable: La fonction wrappée.
+
+    Raises:
+        ValueError: Si les formes des tableaux sont incompatibles.
     """
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -213,10 +242,42 @@ def get_next_version(filepath: Path) -> int:
     return max(existing_versions) + 1 if existing_versions else 1
 
 
+def append_profiler_record_csv(
+        path: Path | str | None,
+        record: Dict[str, Any],
+) -> Path:
+    """
+    Ajoute un enregistrement de profilage dans un fichier CSV.
+
+    Args:
+        path: Chemin du fichier CSV. Si None, utilise 'data/profiler_records.csv'.
+        record: Dictionnaire contenant les données à enregistrer.
+
+    Returns:
+        Path: Le chemin vers le fichier CSV mis à jour.
+    """
+    import pandas as pd
+
+    path = Path(path) if path is not None else Path("data/profiler_records.csv")
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    record = {
+        "timestamp": datetime.now().isoformat(),
+        **record,
+    }
+
+    df = pd.DataFrame([record])
+
+    file_exists = path.exists()
+    df.to_csv(path, mode="a", header=not file_exists, index=False, encoding="utf-8", lineterminator="\n")
+
+    return path
+
+
 def save_figure_with_version(
     fig: plt.Figure,
     filename: str,
-    output_dir: str = "outputs",
+    output_dir: Path | str = "outputs",
     formats: List[str] = None,
     dpi: int = 150,
     tight_layout: bool = True,
@@ -292,7 +353,7 @@ def save_figure_with_version(
 def save_data_with_version(
     data: Any,
     filename: str,
-    output_dir: str = "outputs",
+    output_dir: Path | str = "outputs",
     fmt: str = "npy",
     metadata: Optional[Dict[str, Any]] = None
 ) -> Tuple[Path, Optional[Path]]:
@@ -418,7 +479,12 @@ def load_solution_npz(
     x = data["x"]
     times = data["times"]
     U = data["U"]
-    metadata = json.loads(data["metadata"].decode("utf-8")) if "metadata" in data else {}
+    metadata_raw = data["metadata"].decode("utf-8") if "metadata" in data else {}
+
+    if isinstance(metadata_raw, np.ndarray):
+        metadata_raw = metadata_raw.item()
+
+    metadata = json.loads(metadata_raw)
 
     return x, times, U, metadata
 
@@ -571,6 +637,8 @@ def save_error_table_csv(
     df = pd.DataFrame(rows)
     df.to_csv(path, index=False)
 
+    print(f"Table enregistrée: {path}")
+
     return path
 
 
@@ -584,6 +652,12 @@ def _get_scan_amplitude(result: Dict) -> float | None:
 
     Le format recommandé est la clé "amplitude".
     La clé "amplitude_u0" est acceptée pour compatibilité avec les anciens résultats.
+
+    Args:
+        result: Dictionnaire contenant les résultats d'un scan.
+
+    Returns:
+        float | None: L'amplitude extraite ou None si aucune clé n'est trouvée.
     """
     amplitude = result.get("amplitude")
 
@@ -714,7 +788,8 @@ def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray | 
         bc_type: Type de conditions aux limites ('dirichlet', 'neumann', 'periodic').
 
     Returns:
-        np.ndarray | None: Le gradient calculé ou None si type inconnu.
+        np.ndarray | None: Le gradient calculé (réduit pour 'dirichlet', de même 
+            taille que diff pour 'neumann' et 'periodic') ou None si le type est inconnu.
     """
     if bc_type == "dirichlet":
         # gradient centré (points intérieurs)
@@ -722,7 +797,6 @@ def compute_gradient(diff: np.ndarray, dx: float, bc_type: str) -> np.ndarray | 
 
     elif bc_type == "neumann":
         gradient = np.zeros_like(diff)
-        # Bord gauche (forward difference)
         gradient[1:-1] = (diff[2:] - diff[:-2]) / (2 * dx)
         # bords
         gradient[0] = (diff[1] - diff[0]) / dx
@@ -798,12 +872,18 @@ def compute_linf_time_error(
     """
     Calcule max_n ||solution_time[n] - reference_time[n]||_X.
 
-    norm_type:
-        - "L2"
-        - "H1"
-        - "grad"
-        - "Linf"
-        - "RMSE"
+    Args:
+        solution_time: Matrice de la solution (temps x espace).
+        reference_time: Matrice de référence (temps x espace).
+        dx: Pas spatial.
+        norm_type: Type de norme spatiale à utiliser ("L2", "H1", "grad", "Linf", "RMSE").
+        bc_type: Type de conditions aux limites pour le calcul du gradient.
+
+    Returns:
+        float: L'erreur maximale sur tous les instants temporels.
+
+    Raises:
+        ValueError: Si les dimensions sont incompatibles ou le type de norme est invalide.
     """
     if solution_time.shape != reference_time.shape:
         raise ValueError("Solution et référence doivent être de mêmes dimensions.")
@@ -916,7 +996,7 @@ def normalize_array(arr: np.ndarray, mode: Literal["minmax", "zscore", "robust"]
 # Utilitaires pour Matplotlib
 # =============================================================================
 
-def set_style(style: str = "seaborn-v0_8-darkgrid") -> None:
+def set_style(theme_name: str = "arctic_light") -> None:
     """
     Configure le style de matplotlib.
     
@@ -924,9 +1004,10 @@ def set_style(style: str = "seaborn-v0_8-darkgrid") -> None:
         style: Style matplotlib à utiliser
     """
     try:
-        plt.style.use(style)
+        theme = load_theme(theme_name)
+        theme.apply()
     except OSError:
-        print(f"Style '{style}' non trouvé, utilisation du style par défaut")
+        print(f"Style '{theme_name}' non trouvé, utilisation du style par défaut")
         plt.style.use("default")
 
 
@@ -1066,7 +1147,7 @@ def check_cfl_info(cfl: float, scheme: str = "explicit") -> str:
         scheme: Nom du schéma (utilisé pour compatibilité d'API).
 
     Returns:
-        str: Message informatif formaté.
+        str: Message informatif formaté contenant la valeur du CFL.
     """
     _ = scheme  # Conservé pour compatibilité d'API
     return f"CFL = {cfl:.4f} (indicateur physique, stabilité évaluée via lambda)"
@@ -1136,6 +1217,13 @@ def check_cfl_stability(cfl: float, scheme: str = "explicit") -> Tuple[bool, str
         Le paramètre `cfl` est interprété comme une valeur lambda pour conserver
         la compatibilité avec d'anciens appels. Utiliser directement
         `check_lambda_stability` dans le nouveau code.
+
+    Args:
+        cfl: Valeur (traitée comme lambda) à vérifier.
+        scheme: Nom du schéma numérique.
+
+    Returns:
+        Tuple[bool, str]: (est_stable, message_detaille).
     """
     return check_lambda_stability(cfl, scheme)
 
@@ -1179,14 +1267,14 @@ def estimate_error_bounds(
 ) -> Dict[str, float]:
     """
     Estime les bornes d'erreur d'une solution.
-    
+
     Args:
-        solution: Solution numérique
-        reference: Solution de référence (optionnelle)
-        method: 'absolute', 'relative', ou 'combined'
-        
+        solution: Solution numérique.
+        reference: Solution de référence (optionnelle).
+        method: Méthode de calcul ('absolute', 'relative', ou 'combined').
+
     Returns:
-        Dict[str, float]: Bornes d'erreur estimées
+        Dict[str, float]: Bornes d'erreur estimées (max_abs_error, mean_abs_error, std_error).
     """
     result = {
         "max_abs_error": float(np.max(np.abs(solution))),

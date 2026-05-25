@@ -19,7 +19,7 @@ sys.path.insert(0, '.')
 from core.symbolics import build_numerics_function
 from core.validation import (
     convergence_study_manufactured,
-    print_convergence_table,
+    build_convergence_table_refinement as print_convergence_table,
     run_manufactured_case,
     compute_manufactured_errors,
 )
