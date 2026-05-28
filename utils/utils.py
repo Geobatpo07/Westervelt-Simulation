@@ -10,6 +10,7 @@ Contient:
 - Validation numérique et stabilité
 - Analyse des schémas numériques
 """
+import pathlib
 import tracemalloc
 from pathlib import Path
 from datetime import datetime
@@ -24,6 +25,8 @@ from tqdm.auto import tqdm
 from typing import Dict, List, Tuple, Any, Callable, Optional, Literal, Mapping
 import time
 import functools
+
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 # =============================================================================
@@ -183,6 +186,95 @@ def profile(func: Callable) -> Callable:
 
 
 # =============================================================================
+# Gestion du caching
+# =============================================================================
+
+def sanitize_float(
+        value: float,
+        precision: int = 6,
+) -> str:
+    s = f"{value:.{precision}e}"
+
+    mantissa, exponent = s.split("e")
+
+    mantissa = mantissa.replace(".", "p")
+
+    exp_sign = exponent[0]
+    exp_value = exponent[1:].zfill(2)
+
+    if exp_sign == "+":
+        exp_prefix = "ep"
+    else:
+        exp_prefix = "em"
+
+    return f"{mantissa}{exp_prefix}{exp_value}"
+
+
+def build_cache_name(
+        scheme: str,
+        bc: str,
+        nx: int,
+        nt: int,
+        T_final: float,
+        L: float,
+        A1: float,
+        A2: float,
+) -> str:
+
+    return (
+        f"{scheme}_"
+        f"{bc}_"
+        f"nx{nx}_"
+        f"nt{nt}_"
+        f"T{sanitize_float(T_final)}_"
+        f"L{sanitize_float(L)}_"
+        f"A1{sanitize_float(A1)}_"
+        f"A2{sanitize_float(A2)}"
+    )
+
+
+def build_manufactured_cache_name(
+        scheme: str,
+        bc: str,
+        nx: int,
+        nt: int,
+        T_final: float,
+        L: float,
+        A: float,
+        omega: float,
+        gamma: float,
+        kappa: float,
+) -> str:
+    return (
+        f"manufactured_"
+        f"{scheme}_"
+        f"{bc}_"
+        f"nx{nx}_"
+        f"nt{nt}_"
+        f"T{sanitize_float(T_final)}_"
+        f"L{sanitize_float(L)}_"
+        f"A{sanitize_float(A)}_"
+        f"omega{sanitize_float(omega)}_"
+        f"gamma{sanitize_float(gamma)}_"
+        f"kappa{sanitize_float(kappa)}"
+    )
+
+
+def find_cached_solution(
+        cache_dir: str | Path,
+        pattern: str,
+):
+    cache_dir = Path(cache_dir)
+
+    regex = re.compile(pattern)
+
+    for path in cache_dir.glob("*.npz"):
+        if regex.match(path.stem):
+            return path
+
+    return None
+
+# =============================================================================
 # Gestion des Fichiers et Versioning
 # =============================================================================
 
@@ -258,7 +350,7 @@ def append_profiler_record_csv(
     """
     import pandas as pd
 
-    path = Path(path) if path is not None else Path("data/profiler_records.csv")
+    path = Path(path) if path is not None else Path(PROJECT_ROOT / "data/profiler_records.csv")
     path.parent.mkdir(parents=True, exist_ok=True)
 
     record = {
@@ -479,12 +571,21 @@ def load_solution_npz(
     x = data["x"]
     times = data["times"]
     U = data["U"]
-    metadata_raw = data["metadata"].decode("utf-8") if "metadata" in data else {}
 
-    if isinstance(metadata_raw, np.ndarray):
-        metadata_raw = metadata_raw.item()
+    metadata_raw = {}
 
-    metadata = json.loads(metadata_raw)
+    if "metadata" in data:
+        metadata_raw = data["metadata"]
+
+        if isinstance(metadata_raw, np.ndarray):
+            metadata_raw = metadata_raw.item()
+
+        if isinstance(metadata_raw, bytes):
+            metadata_raw = metadata_raw.decode("utf-8")
+
+    metadata = json.loads(str(metadata_raw))
+
+    print(f"Chargement de la solution depuis {path}")
 
     return x, times, U, metadata
 
@@ -612,34 +713,112 @@ def load_solution_csv_long(
         .values
     )
 
+    print(f"Chargement de la solution depuis {path}")
+
     return x, times, U
 
 
-def save_error_table_csv(
+def save_manufactured_solution_npz(
         path: str | Path,
+        x: np.ndarray,
+        times: np.ndarray,
+        U_num: np.ndarray,
+        U_ref: np.ndarray,
+        metadata: Optional[Dict[str, Any]] = None,
+        compressed: bool = True,
+) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    x = np.asarray(x, dtype=float)
+    times = np.asarray(times, dtype=float)
+    U_num = np.asarray(U_num, dtype=float)
+    U_ref = np.asarray(U_ref, dtype=float)
+
+    expected_shape = (len(times), len(x))
+    if U_num.shape != expected_shape:
+        raise ValueError(f"U_num doit avoir la forme {expected_shape}, mais a la forme {U_num.shape}.")
+    if U_ref.shape != expected_shape:
+        raise ValueError(f"U_ref doit avoir la forme {expected_shape}, mais a la forme {U_ref.shape}.")
+
+    metadata_json = json.dumps(metadata or {})
+
+    saver = np.savez_compressed if compressed else np.savez
+    saver(
+        path,
+        x=x,
+        times=times,
+        U_num=U_num,
+        U_ref=U_ref,
+        metadata=metadata_json,
+    )
+
+    return path
+
+
+def load_manufactured_solution_npz(
+        path: str | Path,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, Any]]:
+    data = np.load(path, allow_pickle=False)
+
+    x = data["x"]
+    times = data["times"]
+    U_num = data["U_num"]
+    U_ref = data["U_ref"]
+
+    metadata_raw = {}
+
+    if "metadata" in data:
+        metadata_raw = data["metadata"]
+
+        if isinstance(metadata_raw, np.ndarray):
+            metadata_raw = metadata_raw.item()
+
+        if isinstance(metadata_raw, bytes):
+            metadata_raw = metadata_raw.decode("utf-8")
+
+    metadata = json.loads(str(metadata_raw))
+
+    print(f"Chargement de la solution depuis {path}")
+
+    return x, times, U_num, U_ref, metadata
+
+
+def save_error_table_csv(
+        filename: str,
         rows: List[Dict[str, Any]],
+        output_dir: Path | str = "outputs",
 ) -> Path:
     """
-    Enregistre une table d'erreurs (liste de dictionnaires) en CSV.
+    Enregistre une table d'erreurs (liste de dictionnaires) en CSV avec contrôle de version.
 
     Args:
-        path: Chemin du fichier CSV.
+        filename: Nom du fichier (sans extension et sans version).
         rows: Données sous forme de liste de dictionnaires.
+        output_dir: Répertoire de sortie.
 
     Returns:
         Path: Chemin du fichier sauvegardé.
     """
     import pandas as pd
 
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Gestion de la version
+    base_path = output_dir / filename
+    if not base_path.suffix:
+        base_path = base_path.with_suffix(".csv")
+    
+    version = get_next_version(base_path)
+    final_path = output_dir / f"{base_path.stem}_v{version}.csv"
 
     df = pd.DataFrame(rows)
-    df.to_csv(path, index=False)
+    df.to_csv(final_path, index=False)
 
-    print(f"Table enregistrée: {path}")
+    print(f"Table enregistrée: {final_path}")
 
-    return path
+    return final_path
 
 
 # =============================================================================

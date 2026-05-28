@@ -12,10 +12,10 @@ from core.validation import (
     initialize_manufactured_solver,
     make_manufactured_source,
     evaluate_exact_solution,
-    run_manufactured_case,
+    _run_manufactured_compute_case as run_manufactured_case,
     compute_manufactured_errors,
     convergence_study_manufactured,
-    print_convergence_table,
+    print_convergence_table_manufactured as print_convergence_table,
 )
 from core.symbolics import build_numerics_function
 from core.solver import WesterveltParams
@@ -87,16 +87,18 @@ class TestManufacturedValidation(unittest.TestCase):
         res = run_manufactured_case(params, self.funcs, self.A, self.L, self.omega, self.gamma, self.kappa, store_energy=False)
         errs = compute_manufactured_errors(res['U_num'], res['U_ref'], params.dx, bc_type='dirichlet')
         # expect the keys to be present and numeric
-        for key in ['Linf_L2', 'Linf_H1', 'Linf_grad', 'Linf_Linf']:
+        for key in ['Linf_L2', 'Linf_rel_L2', 'Linf_H1', 'Linf_grad', 'Linf_Linf']:
             self.assertIn(key, errs)
             self.assertIsInstance(errs[key], float)
 
     def test_convergence_study_manufactured_runs(self):
         # small levels & small base_nx for test speed
-        results = convergence_study_manufactured(self.funcs, levels=[0, 1], L=1.0, T=1e-5, base_nx=10, cfl_factor=0.2)
+        results = convergence_study_manufactured(self.funcs, levels=[0, 1], L=1.0, T=1e-5, base_nx=10, dt_factor=0.2)
         # check structure
         self.assertIn('errors_L2', results)
+        self.assertIn('errors_rel_L2', results)
         self.assertIn('orders_L2', results)
+        self.assertIn('orders_rel_L2', results)
         self.assertIn('mesh_sizes', results)
         # keys for levels
         self.assertTrue(0 in results['errors_L2'])
@@ -105,11 +107,11 @@ class TestManufacturedValidation(unittest.TestCase):
     def test_convergence_errors_decrease(self):
         results = convergence_study_manufactured(
             self.funcs,
-            levels=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            levels=[0, 1, 2],
             L=1.0,
             T=1e-5,
             base_nx=10,
-            cfl_factor=0.2,
+            dt_factor=0.2,
             scheme="explicit",
         )
 

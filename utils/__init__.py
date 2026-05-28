@@ -13,6 +13,12 @@ from utils.utils import (
     validate_shape,
     profile,
 
+    # Gestion du cache
+    sanitize_float,
+    build_cache_name,
+    build_manufactured_cache_name,
+    find_cached_solution,
+
     # Gestion des fichiers et versioning
     ensure_output_dir,
     get_next_version,
@@ -28,6 +34,8 @@ from utils.utils import (
     save_solution_csv_long,
     load_solution_csv_long,
     save_error_table_csv,
+    save_manufactured_solution_npz,
+    load_manufactured_solution_npz,
 
     # Gestion des scans
     build_scan_grid,
@@ -73,6 +81,12 @@ __all__ = [
     "validate_shape",
     "profile",
 
+    # Gestion du cache
+    "sanitize_float",
+    "build_cache_name",
+    "build_manufactured_cache_name",
+    "find_cached_solution",
+
     # Gestion des fichiers
     "ensure_output_dir",
     "get_next_version",
@@ -86,6 +100,8 @@ __all__ = [
     "save_solution_csv_long",
     "load_solution_csv_long",
     "save_error_table_csv",
+    "save_manufactured_solution_npz",
+    "load_manufactured_solution_npz",
 
     # Gestion des scans
     "build_scan_grid",

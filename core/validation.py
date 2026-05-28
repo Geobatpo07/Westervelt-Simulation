@@ -10,10 +10,13 @@ Fournit des fonctionnalités pour:
 - Le calcul et l'affichage de tables d'erreurs et d'ordres de convergence.
 """
 
+import pathlib
+from json.decoder import NaN
+
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple, Callable, List, Optional, Iterable
-
+from pathlib import Path
 
 from core.numerics import _apply_boundary
 from core.solver import WesterveltSolver, WesterveltParams
@@ -21,11 +24,16 @@ from utils import (
     compute_linf_time_error,
     compute_error_metrics,
     compute_convergence_orders,
-    save_error_table_csv,
     save_solution_npz,
     load_solution_npz,
+    build_cache_name,
+    find_cached_solution,
+    save_manufactured_solution_npz,
+    load_manufactured_solution_npz,
+    build_manufactured_cache_name,
 )
 
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 def make_time_grid(T: float, dt: float) -> np.ndarray:
     """
@@ -120,6 +128,9 @@ def initialize_manufactured_solver(
     b = solver.param.b
     k = solver.param.k
 
+    if funcs['bc_type'] != solver.param.bc:
+        raise ValueError(f"Type de condition aux limites incohérent entre la solution fabriquée ({funcs['bc_type']}) et le solveur ({solver.param.bc}).")
+
     u_exact = funcs['u']
     ut_exact = funcs['ut']
 
@@ -207,7 +218,7 @@ def evaluate_exact_solution(
     return np.array([u_exact(x, t, A, L, omega, gamma, kappa, c, b, k) for t in times])
 
 
-def run_manufactured_case(
+def _run_manufactured_compute_case(
         params: WesterveltParams,
         funcs: Dict[str, Callable],
         A: float,
@@ -242,6 +253,9 @@ def run_manufactured_case(
     """
     solver = WesterveltSolver(params)
 
+    if funcs['bc_type'] != solver.param.bc:
+        raise ValueError(f"Le type de conditions aux limites ({funcs['bc_type']}) ne correspond pas au type de conditions aux limites du solveur ({solver.param.bc}).")
+
     initialize_manufactured_solver(solver, funcs, A, L, omega, gamma, kappa)
 
     if times_to_save is None:
@@ -267,6 +281,168 @@ def run_manufactured_case(
     }
 
 
+def run_manufactured_case_cached(
+        params: WesterveltParams,
+        funcs: Dict[str, Callable],
+        A: float,
+        L: float,
+        omega: float,
+        gamma: float,
+        kappa: float,
+        times_to_save: Iterable[float] | None = None,
+        store_energy: bool = False,
+        cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
+        force_recompute: bool = False,
+        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
+):
+    """
+    Exécute une simulation avec solution fabriquée en utilisant un cache.
+
+    Args:
+        params: Paramètres de la simulation.
+        funcs: Dictionnaire des fonctions analytiques.
+        A: Amplitude.
+        L: Paramètre spatial L.
+        omega: Pulsation.
+        gamma: Paramètre gamma.
+        kappa: Paramètre kappa.
+        times_to_save: Instants temporels à sauvegarder.
+        store_energy: Enregistrer l'énergie.
+        cache_dir: Répertoire du cache.
+        force_recompute: Forcer le recalcul même si le cache existe.
+        profiler_path: Chemin du fichier de profiling.
+
+    Returns:
+        Dict[str, Any]: Résultats de la simulation.
+    """
+    import re
+
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = build_manufactured_cache_name(
+        scheme=params.scheme,
+        bc=str(funcs['bc_type']),
+        nx=params.nx,
+        nt=params.nt,
+        T_final=params.nt * params.dt,
+        L=L,
+        A=A,
+        omega=omega,
+        gamma=gamma,
+        kappa=kappa,
+    )
+
+    cache_pattern = rf"^{re.escape(cache_key)}$"
+
+    cached_path = find_cached_solution(
+        cache_dir=cache_dir,
+        pattern=cache_pattern,
+    )
+
+    if cached_path is not None and not force_recompute:
+        x, times, U_num, U_ref, metadata = load_manufactured_solution_npz(cached_path)
+
+        if (
+            metadata["scheme"] == params.scheme
+            and metadata["bc"] == funcs['bc_type']
+            and metadata["nx"] == params.nx
+            and metadata["nt"] == params.nt
+            and np.isclose(metadata["T_final"], params.nt * params.dt)
+            and np.isclose(metadata["L"], L)
+            and np.isclose(metadata["A"], A)
+            and np.isclose(metadata["omega"], omega)
+            and np.isclose(metadata["gamma"], gamma)
+            and np.isclose(metadata["kappa"], kappa)
+        ):
+            return {
+                "solver": None,
+                "params": None,
+                "x": x,
+                "times": times,
+                "U_num": U_num,
+                "U_ref": U_ref,
+                "dx": params.dx,
+                "dt": params.dt,
+                "nx": params.nx,
+                "nt": params.nt,
+                "T_final": params.nt * params.dt,
+                "A": A,
+                "L": L,
+                "omega": omega,
+                "gamma": gamma,
+                "kappa": kappa,
+                "scheme": params.scheme,
+                "bc": funcs['bc_type'],
+                "cache_path": cached_path,
+                "loaded_from_cache": bool(cached_path is not None and not force_recompute),
+                "metadata": metadata,
+            }
+
+    cache_path = cache_dir / f"{cache_key}.npz"
+
+    case = _run_manufactured_compute_case(
+        params=params,
+        funcs=funcs,
+        A=A,
+        L=L,
+        omega=omega,
+        gamma=gamma,
+        kappa=kappa,
+        times_to_save=times_to_save,
+        store_energy=store_energy,
+    )
+
+    if profiler_path is not None and case.get("solver") is not None:
+        case["solver"].save_profile_data(
+            path=profiler_path,
+            extra_metadata={
+                "context": "run_case_cached",
+                "loaded_from_cache": False,
+                "cache_path": str(cache_path),
+                "nx": params.nx,
+                "nt": params.nt,
+                "T_final": params.nt * params.dt,
+                "L": L,
+                "scheme": params.scheme,
+                "bc": params.bc,
+                "A": A,
+                "A1": NaN,
+                "A2": NaN,
+            },
+        )
+
+    save_manufactured_solution_npz(
+        path=cache_path,
+        x=case["x"],
+        times=case["times"],
+        U_num=case["U_num"],
+        U_ref=case["U_ref"],
+        metadata={
+            "nx": params.nx,
+            "nt": params.nt,
+            "dx": params.dx,
+            "dt": params.dt,
+            "T_final": params.nt * params.dt,
+            "L": L,
+            "scheme": params.scheme,
+            "bc": params.bc,
+            "A": A,
+            "omega": omega,
+            "gamma": gamma,
+            "kappa": kappa,
+            "loaded_from_cache": False,
+        },
+        compressed=True,
+    )
+
+    case["cache_path"] = cache_path
+    case["loaded_from_cache"] = False
+
+    return case
+
+
+
 def compute_manufactured_errors(
         U_num: np.ndarray,
         U_ref: np.ndarray,
@@ -283,11 +459,15 @@ def compute_manufactured_errors(
         bc_type: Conditions aux limites.
 
     Returns:
-        Dict[str, float]: Erreurs Linf en temps pour diverses normes spatiales (L2, H1, grad, Linf).
+        Dict[str, float]: Erreurs Linf en temps pour diverses normes spatiales.
+            Contient 'Linf_L2', 'Linf_rel_L2', 'Linf_H1', 'Linf_grad', 'Linf_Linf'.
     """
     return {
         "Linf_L2": compute_linf_time_error(
             U_num, U_ref, dx, norm_type="L2", bc_type=bc_type
+        ),
+        "Linf_rel_L2": compute_relative_linf_l2_error(
+            U_num, U_ref, dx
         ),
         "Linf_H1": compute_linf_time_error(
             U_num, U_ref, dx, norm_type="H1", bc_type=bc_type
@@ -308,6 +488,19 @@ def compute_manufactured_error_norm_over_time(
         norm_type: str = "L2",
         bc_type: str = "dirichlet",
 ) -> np.ndarray:
+    """
+    Calcule la norme de l'erreur au cours du temps.
+
+    Args:
+        U_num: Solution numérique.
+        U_ref: Solution de référence.
+        dx: Pas spatial.
+        norm_type: Type de norme ('L2', 'H1', 'grad', 'Linf').
+        bc_type: Conditions aux limites.
+
+    Returns:
+        np.ndarray: Vecteur des normes d'erreur à chaque instant.
+    """
     values = []
 
     for u_num, u_ref in zip(U_num, U_ref):
@@ -343,13 +536,13 @@ def convergence_study_manufactured(
         beta: float = 3.5,
         mu_v: float = 6e-6,
         A: float = 1e-3,
-        omega: float = 2.0 * np.pi * 1e4,
         gamma: float = 1.0,
         kappa: float = 1e4,
         scheme: str = "explicit",
         base_nx: int = 50,
         dt_mode: str = "cfl",
         dt_factor: float = 0.2,
+        force_recompute: bool = False,
 ) -> Dict[str, Any]:
     """
     Réalise une étude de convergence complète (MMS).
@@ -371,7 +564,9 @@ def convergence_study_manufactured(
     Returns:
         Dict[str, Any]: Résultats complets incluant erreurs, ordres et cas individuels.
     """
+    omega = 2.0 * np.pi / T
     errors_L2 = {}
+    errors_rel_L2 = {}
     errors_H1 = {}
     errors_grad = {}
     errors_Linf = {}
@@ -408,11 +603,13 @@ def convergence_study_manufactured(
         )
 
         times = np.arange(nt + 1) * dt
+        # times = [0, T / 8, 2 * T / 8, 3 * T / 8, 4 * T / 8, 5 * T / 8, 6 * T / 8, 7 * T / 8, T]
 
-        case = run_manufactured_case(
+        case = run_manufactured_case_cached(
             params, funcs, A, L, omega, gamma, kappa,
             times_to_save=times,
             store_energy=False,
+            force_recompute=force_recompute,
         )
 
         errs = compute_manufactured_errors(
@@ -420,6 +617,7 @@ def convergence_study_manufactured(
         )
 
         errors_L2[N] = errs["Linf_L2"]
+        errors_rel_L2[N] = errs["Linf_rel_L2"]
         errors_H1[N] = errs["Linf_H1"]
         errors_grad[N] = errs["Linf_grad"]
         errors_Linf[N] = errs["Linf_Linf"]
@@ -428,16 +626,19 @@ def convergence_study_manufactured(
         cases[N] = case
 
     orders_L2 = compute_convergence_orders(errors_L2)
+    orders_rel_L2 = compute_convergence_orders(errors_rel_L2)
     orders_H1 = compute_convergence_orders(errors_H1)
     orders_grad = compute_convergence_orders(errors_grad)
     orders_Linf = compute_convergence_orders(errors_Linf)
 
     return {
         "errors_L2": errors_L2,
+        "errors_rel_L2": errors_rel_L2,
         "errors_H1": errors_H1,
         "errors_grad": errors_grad,
         "errors_Linf": errors_Linf,
         "orders_L2": orders_L2,
+        "orders_rel_L2": orders_rel_L2,
         "orders_H1": orders_H1,
         "orders_grad": orders_grad,
         "orders_Linf": orders_Linf,
@@ -468,6 +669,8 @@ def build_manufactured_convergence_table(results: Dict[str, Any],) -> pd.DataFra
             "dt": results["time_steps"][N],
             "Linf_L2": results["errors_L2"][N],
             "order_Linf_L2": results["orders_L2"].get(N, np.nan),
+            "Linf_rel_L2": results["errors_rel_L2"][N],
+            "order_Linf_rel_L2": results["orders_rel_L2"].get(N, np.nan),
             "Linf_H1": results["errors_H1"][N],
             "order_Linf_H1": results["orders_H1"].get(N, np.nan),
             "Linf_grad": results["errors_grad"][N],
@@ -488,11 +691,13 @@ def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
     """
 
     errors_L2 = results["errors_L2"]
+    errors_rel_L2 = results["errors_rel_L2"]
     errors_H1 = results["errors_H1"]
     errors_grad = results["errors_grad"]
     errors_Linf = results["errors_Linf"]
 
     orders_L2 = results["orders_L2"]
+    orders_rel_L2 = results["orders_rel_L2"]
     orders_H1 = results["orders_H1"]
     orders_grad = results["orders_grad"]
     orders_Linf = results["orders_Linf"]
@@ -503,18 +708,20 @@ def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
     levels = sorted(errors_L2.keys())
 
     print("\nTable de convergence - solution fabriquée")
-    print("-" * 132)
+    print("-" * 156)
     print(
         f"{'N':>4} | {'dx':>12} | {'dt':>12} | "
         f"{'LinfL2':>12} | {'ord':>6} | "
+        f"{'RelL2':>12} | {'ord':>6} | "
         f"{'H1':>12} | {'ord':>6} | "
         f"{'LinfGrad':>12} | {'ord':>6} | "
         f"{'Linf':>12} | {'ord':>6}"
     )
-    print("-" * 132)
+    print("-" * 156)
 
     for N in levels:
         o_l2 = orders_L2.get(N, np.nan)
+        o_rel_l2 = orders_rel_L2.get(N, np.nan)
         o_h1 = orders_H1.get(N, np.nan)
         o_grad = orders_grad.get(N, np.nan)
         o_linf = orders_Linf.get(N, np.nan)
@@ -525,6 +732,8 @@ def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
             f"{time_steps[N]:>12.4e} | "
             f"{errors_L2[N]:>12.4e} | "
             f"{o_l2:>6.3f} | "
+            f"{errors_rel_L2[N]:>12.4e} | "
+            f"{o_rel_l2:>6.3f} | "
             f"{errors_H1[N]:>12.4e} | "
             f"{o_h1:>6.3f} |"
             f"{errors_grad[N]:>12.4e} | "
@@ -533,7 +742,7 @@ def print_convergence_table_manufactured(results: Dict[str, Any]) -> None:
             f"{o_linf:>6.3f}"
         )
 
-    print("-" * 132)
+    print("-" * 156)
 
 # ------------------------------------------------------------------------------------------------------------------------
 # VALIDATION PAR RAFFINEMENT DU MAILLAGE
@@ -606,17 +815,21 @@ def restrict_fine_to_coarse(
 
 
 def compute_relative_linf_l2_error(
-        U_coarse: np.ndarray,
-        U_fine_restricted: np.ndarray,
+        U_1: np.ndarray,
+        U_2: np.ndarray,
         dx: float,
         eps: float = 1e-14,
 ) -> float:
-    error = U_coarse - U_fine_restricted
+    error = U_1 - U_2
 
     err_l2_t = np.sqrt(np.sum(error ** 2, axis=1))
-    ref_l2_t = np.sqrt(np.sum(U_fine_restricted ** 2, axis=1))
+    ref_l2_t = np.sqrt(np.sum(U_2 ** 2, axis=1))
 
-    return np.max(err_l2_t / (ref_l2_t + eps))
+    numerator = np.max(err_l2_t)
+    denominator = np.max(ref_l2_t)
+
+    return float(numerator / (denominator + eps))
+
 
 def compute_refinement_error(
         U_coarse: np.ndarray,
@@ -655,7 +868,7 @@ def compute_refinement_error(
     }
 
 
-def run_case_direct(
+def _run_case_compute(
         nx: int,
         nt: int,
         T_final: float = 37e-6,
@@ -735,6 +948,152 @@ def run_case_direct(
     }
 
 
+def run_case_cached(
+        nx: int,
+        nt: int,
+        T_final: float = 37e-6,
+        L: float = 0.2,
+        c: float = 1500.0,
+        rho0: float = 1000.0,
+        beta: float = 3.5,
+        mu_v: float = 6e-6,
+        A1: float = 1.2e8,
+        A2: float = 1.0e11,
+        scheme: str = "semi_implicit",
+        bc: str = "dirichlet",
+        store_energy: bool = False,
+        cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
+        force_recompute: bool = False,
+        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
+):
+    import re
+
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    cache_key = build_cache_name(
+        scheme=scheme,
+        bc=bc,
+        nx=nx,
+        nt=nt,
+        T_final=T_final,
+        L=L,
+        A1=A1,
+        A2=A2
+    )
+
+    cache_pattern = rf"^{re.escape(cache_key)}$"
+
+    cached_path = find_cached_solution(
+        cache_dir=cache_dir,
+        pattern=cache_pattern,
+    )
+
+    if cached_path is not None and not force_recompute:
+        x, times, U, metadata = load_solution_npz(cached_path)
+
+        if(
+            metadata.get("scheme") == scheme
+            and metadata.get("bc") == bc
+            and int(metadata.get("nx")) == nx
+            and int(metadata.get("nt")) == nt
+            and float(metadata.get("T_final")) == float(T_final)
+            and float(metadata.get("L")) == float(L)
+            and float(metadata.get("A1")) == float(A1)
+            and float(metadata.get("A2")) == float(A2)
+        ):
+            dx = L / (nx - 1)
+            dt = T_final / nt
+
+            return {
+                "solver": None,
+                "params": None,
+                "x": x,
+                "times": times,
+                "U": U,
+                "dx": dx,
+                "dt": dt,
+                "nx": nx,
+                "nt": nt,
+                "T_final": T_final,
+                "L": L,
+                "scheme": scheme,
+                "bc": bc,
+                "cache_path": cached_path,
+                "loaded_from_cache": bool(cached_path is not None and not force_recompute),
+                "metadata": metadata,
+            }
+
+    cache_path = cache_dir / f"{cache_key}.npz"
+
+    case = _run_case_compute(
+        nx=nx,
+        nt=nt,
+        T_final=T_final,
+        L=L,
+        c=c,
+        rho0=rho0,
+        beta=beta,
+        mu_v=mu_v,
+        A1=A1,
+        A2=A2,
+        scheme=scheme,
+        bc=bc,
+        store_energy=store_energy,
+    )
+
+    if profiler_path is not None and case.get("solver") is not None:
+        case["solver"].save_profile_data(
+            path=profiler_path,
+            extra_metadata={
+                "context": "run_case_cached",
+                "loaded_from_cache": False,
+                "cache_path": str(cache_path),
+                "nx": nx,
+                "nt": nt,
+                "T_final": T_final,
+                "L": L,
+                "scheme": scheme,
+                "bc": bc,
+                "A": NaN,
+                "A1": A1,
+                "A2": A2,
+            },
+        )
+
+    save_solution_npz(
+        path=cache_path,
+        x=case["x"],
+        times=case["times"],
+        U=case["U"],
+        metadata={
+            "nx": nx,
+            "nt": nt,
+            "dx": case["dx"],
+            "dt": case["dt"],
+            "T_final": T_final,
+            "L": L,
+            "scheme": scheme,
+            "bc": bc,
+            "A1": A1,
+            "A2": A2,
+            "k": case["params"].k,
+            "b": case["params"].b,
+            "c": c,
+            "rho0": rho0,
+            "beta": beta,
+            "mu_v": mu_v,
+            "loaded_from_cache": False,
+        },
+        compressed=True,
+    )
+
+    case["cache_path"] = cache_path
+    case["loaded_from_cache"] = False
+
+    return case
+
+
 def refinement_validation_direct(
         coarse: dict,
         fine: dict,
@@ -790,6 +1149,8 @@ def convergence_study_refinement(
         scheme: str = "explicit",
         bc: str = "dirichlet",
         store_energy: bool = False,
+        force_recompute: bool = False,
+        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
 ) -> Dict[str, Any]:
     """
     Réalise une étude de convergence par raffinement successif.
@@ -809,7 +1170,7 @@ def convergence_study_refinement(
     cases = {}
 
     for nx, nt in levels:
-        case = run_case_direct(
+        case = run_case_cached(
             nx=nx,
             nt=nt,
             T_final=T_final,
@@ -817,6 +1178,8 @@ def convergence_study_refinement(
             scheme=scheme,
             bc=bc,
             store_energy=store_energy,
+            force_recompute=force_recompute,
+            profiler_path=profiler_path,
         )
         cases[(nx, nt)] = case
 
@@ -937,7 +1300,7 @@ def scan_critical_amplitudes(
         A2 = float(A2_factor * A1)
 
         try:
-            case = run_case_direct(
+            case = run_case_cached(
                 nx=nx,
                 nt=nt,
                 T_final=T_final,
@@ -949,7 +1312,10 @@ def scan_critical_amplitudes(
             )
 
             U = case["U"]
-            k = case["params"].k
+            if case["params"] is not None:
+                k = case["params"].k
+            else:
+                k = case["metadata"].get("k", 3.5 / (1000.0 * 1500.0 ** 2))
 
             finite = bool(np.isfinite(U).all())
 
