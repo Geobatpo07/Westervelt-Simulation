@@ -11,15 +11,16 @@ Fournit des fonctionnalités pour:
 """
 
 import pathlib
-from json.decoder import NaN
 
 import numpy as np
 import pandas as pd
 from typing import Dict, Any, Tuple, Callable, List, Optional, Iterable
 from pathlib import Path
+from datetime import datetime
 
 from core.numerics import _apply_boundary
 from core.solver import WesterveltSolver, WesterveltParams
+from core.profiler_db import insert_profiler_record
 from utils import (
     compute_linf_time_error,
     compute_error_metrics,
@@ -95,6 +96,51 @@ def nx_from_mesh_size(dx: float, L: float) -> int:
         int: Nombre de points requis pour couvrir L avec un pas dx.
     """
     return int(np.ceil(L / dx)) + 1
+
+
+def save_solver_profile_to_sqlite(
+        solver: WesterveltSolver,
+        extra_metadata: Dict[str, Any],
+        profiler_db_path: str | Path | None = PROJECT_ROOT / "data/profiler_runs.sqlite",
+) -> None:
+    if profiler_db_path is None:
+        return
+
+    if not hasattr(solver, "profiler") or not solver.profiler:
+        return
+
+    extra_metadata = extra_metadata or {}
+
+    for func_name, records in solver.profiler.items():
+        durations = records["durations"]
+        memories = records["peak_memory_mb"]
+
+        if not durations or not memories:
+            continue
+
+        record = {
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "function": func_name,
+            "scheme": solver.param.scheme,
+            "bc": solver.param.bc,
+            "nx": solver.param.nx,
+            "nt": solver.param.nt,
+            "dx": solver.param.dx,
+            "dt": solver.param.dt,
+            "T_final": solver.param.nt * solver.param.dt,
+            "c": solver.param.c,
+            "rho0": solver.param.rho0,
+            "beta": solver.param.beta,
+            "mu_v": solver.param.mu_v,
+            "b": solver.param.b,
+            "time_total_s": float(sum(durations)),
+            "memory_max_mb": float(max(memories)),
+            **extra_metadata,
+        }
+
+        insert_profiler_record(record=record, db_path=profiler_db_path)
+
+        print("Ligne de profilage enregistrée dans la base de données SQLite.")
 
 # ------------------------------------------------------------------------------------------------------------------------
 # VALIDATION PAR SOLUTION FABRIQUEE
@@ -294,6 +340,7 @@ def run_manufactured_case_cached(
         cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
         force_recompute: bool = False,
         profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
+        profiler_db_path: str | Path | None = PROJECT_ROOT / "data/profiler_runs.sqlite",
 ):
     """
     Exécute une simulation avec solution fabriquée en utilisant un cache.
@@ -311,6 +358,7 @@ def run_manufactured_case_cached(
         cache_dir: Répertoire du cache.
         force_recompute: Forcer le recalcul même si le cache existe.
         profiler_path: Chemin du fichier de profiling.
+        profiler_db_path: Chemin de la base SQLite pour le profilage.
 
     Returns:
         Dict[str, Any]: Résultats de la simulation.
@@ -407,8 +455,27 @@ def run_manufactured_case_cached(
                 "scheme": params.scheme,
                 "bc": params.bc,
                 "A": A,
-                "A1": NaN,
-                "A2": NaN,
+                "A1": None,
+                "A2": None,
+            },
+        )
+        save_solver_profile_to_sqlite(
+            solver=case["solver"],
+            profiler_db_path=profiler_db_path,
+            extra_metadata={
+                "context": "run_manufactured_case_cached",
+                "validation_type": "manufactured",
+                "loaded_from_cache": False,
+                "cache_path": str(cache_path),
+                "nx": params.nx,
+                "nt": params.nt,
+                "T_final": params.nt * params.dt,
+                "L": L,
+                "scheme": params.scheme,
+                "bc": params.bc,
+                "A": A,
+                "A1": None,
+                "A2": None,
             },
         )
 
@@ -965,6 +1032,7 @@ def run_case_cached(
         cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
         force_recompute: bool = False,
         profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
+        profiler_db_path: str | Path | None = PROJECT_ROOT / "outputs/profiler_db.sqlite",
 ):
     import re
 
@@ -1055,7 +1123,26 @@ def run_case_cached(
                 "L": L,
                 "scheme": scheme,
                 "bc": bc,
-                "A": NaN,
+                "A": None,
+                "A1": A1,
+                "A2": A2,
+            },
+        )
+        save_solver_profile_to_sqlite(
+            solver=case["solver"],
+            profiler_db_path=profiler_db_path,
+            extra_metadata={
+                "context": "run_case_cached",
+                "validation_type": "refinement",
+                "loaded_from_cache": False,
+                "cache_path": str(cache_path),
+                "nx": nx,
+                "nt": nt,
+                "T_final": T_final,
+                "L": L,
+                "scheme": scheme,
+                "bc": bc,
+                "A": None,
                 "A1": A1,
                 "A2": A2,
             },

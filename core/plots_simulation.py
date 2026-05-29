@@ -337,17 +337,17 @@ def run_refinement_plots(
     save_path.mkdir(parents=True, exist_ok=True)
 
     # Exécution des cas de validation
-    case_coarse = run_case_cached(nx=2001, nt=2000, scheme=scheme)
-    case_fine = run_case_cached(nx=4001, nt=4000, scheme=scheme)
+    case_coarse = run_case_cached(nx=2001, nt=2000, scheme=scheme, force_recompute=False)
+    case_fine = run_case_cached(nx=4001, nt=4000, scheme=scheme, force_recompute=False)
     comparison = refinement_validation_direct(coarse=case_coarse, fine=case_fine, bc_type=bc)
     df_convergence = convergence_study_refinement(
         levels = [
             (101, 10000),
             (201, 10000),
-            (401, 10000),
-            (801, 10000),
-            (1601, 10000),
-            (3201, 10000),
+            # (401, 10000),
+            # (801, 10000),
+            # (1601, 10000),
+            # (3201, 10000),
             # (6401, 10000),
             # (12801, 10000),
             # (25601, 10000),
@@ -440,12 +440,22 @@ def plot_manufactured_comparison(case, snapshot_index=-1):
     U_num = case['U_num']
     U_ref = case['U_ref']
 
+    t = times[snapshot_index]
+
+    exponent = int(np.floor(np.log10(abs(t))))
+    mantissa = t / 10**exponent
+
     fig, ax = plt.subplots(figsize=(8, 6))
 
     ax.plot(x, U_num[snapshot_index], label="Solution numérique", linewidth=2, linestyle='-', color='b')
     ax.plot(x, U_ref[snapshot_index], label="Solution exacte", linewidth=2, linestyle='--', color='r')
 
-    ax.set_title(f'Solution fabriquée : comparaison à t = {times[snapshot_index]:.3e} s')
+    if np.isclose(mantissa, 1):
+        time_label = rf"$t = 10^{{{exponent}}}\,\mathrm{{s}}$"
+    else:
+        time_label = rf"$t = {mantissa:.1f}\times10^{{{exponent}}}\,\mathrm{{s}}$"
+
+    ax.set_title(f'Solution fabriquée : comparaison à {time_label}')
     ax.set_xlabel('x')
     ax.set_ylabel('u(t,x)')
     ax.grid(True)
@@ -662,8 +672,8 @@ def run_manufactured_plots(
     finest_level_semi = max(study_semi["cases"].keys())
     case_semi = study_semi["cases"][finest_level_semi]
 
-    fig1 = plot_manufactured_snapshots(case_semi, field='U_num', title="Solution numérique - solution fabriquée", n_snapshots=8)
-    fig2 = plot_manufactured_snapshots(case_semi, field='U_ref', title="Solution exacte - solution fabriquée", n_snapshots=8)
+    fig1 = plot_manufactured_snapshots(case_semi, field='U_num', title="Solution numérique - solution fabriquée", n_snapshots=6)
+    fig2 = plot_manufactured_snapshots(case_semi, field='U_ref', title="Solution exacte - solution fabriquée", n_snapshots=6)
     fig3 = plot_manufactured_comparison(case_semi, snapshot_index=-1)
     fig4 = plot_manufactured_error_norm_over_time(case_semi,  norm_type='L2', bc_type='dirichlet')
     fig5 = plot_manufactured_error_norm_over_time(case_semi,  norm_type='H1', bc_type='dirichlet')
@@ -737,16 +747,16 @@ if __name__ == "__main__":
     refinement_dir = OUTPUTS_DIR / "refinement_plots"
     manufactured_dir = OUTPUTS_DIR / "manufactured_plots"
 
-    # run_refinement_plots(show=True, save=False, save_path=refinement_dir, scheme="semi_implicit", theme="scientific")
+    run_refinement_plots(show=True, save=False, save_path=refinement_dir, scheme="explicit", theme="scientific")
     run_manufactured_plots(
         funcs,
         show=True,
-        save=True,
+        save=False,
         save_path=manufactured_dir,
         theme="scientific",
         levels=[0, 1, 2, 3, 4, 5,],
         L=1.0,
-        T=1e-4,
+        T=1e-3,
         A=1e-3,
         gamma=0.1,
         kappa=1.0,
