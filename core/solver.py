@@ -8,6 +8,7 @@ from typing import Any, List, Dict, Tuple, Callable
 from core.explicite import step_explicit
 from core.semi_implicite import step_semi_implicit
 from core.numerics import _apply_boundary, _laplacian_all, compute_energy
+from core.profiler_db import DEFAULT_DB_PATH, insert_profiler_record
 from utils import timer, profile, append_profiler_record_csv
 
 
@@ -37,6 +38,7 @@ class WesterveltParams:
     rho0: float = 1000.0
     beta: float = 3.5
     mu_v: float = 0.0
+    zeta: float = 0.0
 
     # Parametres legacy optionnels (compatibilite)
     B_over_A: float | None = None
@@ -78,7 +80,10 @@ class WesterveltParams:
             raise ValueError("mu_v doit etre positif ou nul.")
 
         # Coefficients physiques du modele.
-        self.b = self.mu_v / self.rho0
+        if self.zeta != 0.0:
+            self.b = (self.zeta + (4 / 3) * self.mu_v) / self.rho0
+        else:
+            self.b = (self.mu_v + (4 / 3)) / self.rho0
         self.k = self.beta / (self.rho0 * self.c ** 2)
 
         self.scheme = self.scheme.lower()
@@ -348,7 +353,7 @@ class WesterveltSolver:
         return float(compute_energy(self.u, self.u_prev, self.param.c, self.param.dt, self.param.dx))
 
 
-    def _evaluate_source(self, source: Any, t: float) -> np.ndarray | None:
+    def _evaluate_source(self, source: Any, t: float) -> object | None | Any:
         """
         Évalue la fonction source au temps t sur toute la grille spatiale.
 
@@ -418,6 +423,9 @@ class WesterveltSolver:
 
         self.u_prev = self.u.copy()
         self.u = self.u_next.copy()
+        # print(self.F)
+        # print(self.u)
+        # print(self.u_next)
 
 
     @profile
@@ -503,7 +511,7 @@ class WesterveltSolver:
         return snapshots
 
 
-    @timer
+    @profile
     def run_stability_scan(
         self,
         dt_values: List[float] | np.ndarray,
@@ -696,14 +704,16 @@ class WesterveltSolver:
 
     def save_profile_data(
         self,
-        path: Path | str,
+        path: Path | str | None = None,
+        db_path: Path | str | None = DEFAULT_DB_PATH,
         extra_metadata: Dict[str, Any] | None = None,
     ) -> None:
         """
-        Sauvegarde les données de profilage dans un fichier CSV.
+        Sauvegarde les données de profilage dans un fichier CSV et/ou une base de données SQLite.
 
         Args:
-            path: Chemin vers le fichier CSV de destination.
+            path: Chemin vers le fichier CSV de destination (optionnel).
+            db_path: Chemin vers la base de données SQLite (par défaut DEFAULT_DB_PATH).
             extra_metadata: Métadonnées additionnelles à inclure dans chaque ligne.
         """
         if not hasattr(self, "profiler") or not self.profiler:
@@ -711,6 +721,7 @@ class WesterveltSolver:
             return
         
         extra_metadata = extra_metadata or {}
+        from datetime import datetime
         
         for func_name, records in self.profiler.items():
             durations = records["durations"]
@@ -720,6 +731,7 @@ class WesterveltSolver:
                 continue
                 
             record = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "function": func_name,
                 "scheme": self.param.scheme,
                 "bc": self.param.bc,
@@ -742,6 +754,10 @@ class WesterveltSolver:
                 **extra_metadata,
             }
             
-            append_profiler_record_csv(path=path, record=record)
-            
-        print(f"Données de profiling enregistrées dans : {path}")    
+            if path:
+                append_profiler_record_csv(path=path, record=record)
+                print(f"Données de profiling enregistrées dans le CSV : {path}")
+
+            if db_path:
+                insert_profiler_record(record=record, db_path=db_path)
+                print(f"Données de profiling enregistrées dans la base SQLite : {db_path}")

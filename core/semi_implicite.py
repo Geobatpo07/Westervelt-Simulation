@@ -16,15 +16,7 @@ def step_semi_implicit(u, F, c, b, k, dt, dx, bc_type, source=None):
 
       u^{n+1} = u^n + dt * (F^{n+1} + b Δu^{n+1}) / (1 - 2k u^n)
     """
-    F_next = update_F(
-        F,
-        u,
-        dt,
-        dx,
-        c,
-        bc_type,
-        source=source,
-    )
+    F_next = update_F(F, u, dt, dx, c, bc_type, source=source)
 
     lower, diag, upper, rhs = assemble_semi_implicit_system(
         u,

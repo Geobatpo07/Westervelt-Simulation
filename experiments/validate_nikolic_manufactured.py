@@ -7,7 +7,7 @@ Features:
 - optional interactive display (`--mode show`) or saving (`--mode save`)
 - additional criteria: non-dégénérescence, pointwise error, L2 error, energy history
 """
-
+import pathlib
 import sys
 import os
 import argparse
@@ -19,15 +19,15 @@ sys.path.insert(0, '.')
 from core.symbolics import build_numerics_function
 from core.validation import (
     convergence_study_manufactured,
-    build_convergence_table_refinement as print_convergence_table,
-    run_manufactured_case,
+    build_manufactured_convergence_table as print_convergence_table,
+    run_manufactured_case_cached,
     compute_manufactured_errors,
 )
 from core.solver import WesterveltParams
 from utils import save_figure_with_version
 
-
-OUT_DIR = os.path.join('outputs', 'analysis', 'validate_nikolic')
+PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
+OUT_DIR = PROJECT_ROOT / os.path.join('outputs', 'analysis', 'validate_nikolic')
 os.makedirs(OUT_DIR, exist_ok=True)
 
 
@@ -175,7 +175,6 @@ def main(mode='show', verbose=True):
         beta=beta,
         mu_v=mu_v,
         A=1e-3,
-        omega=omega,
         gamma=0.5,
         kappa=1e4,
         scheme='explicit',
@@ -197,25 +196,25 @@ def main(mode='show', verbose=True):
         beta=beta,
         mu_v=mu_v,
         A=1e-3,
-        omega=omega,
         gamma=0.5,
         kappa=1e4,
         scheme='explicit',
         base_nx=50,
         dt_mode='quadratic',
         dt_factor=0.1,
+        force_recompute=True,
     )
 
     if verbose:
         print('\n' + '='*130)
         print('CONVERGENCE TABLE - CFL TIME STEPPING')
         print('='*130)
-        print_convergence_table(results_cfl)
+        print(print_convergence_table(results_cfl))
 
         print('\n' + '='*130)
         print('CONVERGENCE TABLE - QUADRATIC TIME STEPPING')
         print('='*130)
-        print_convergence_table(results_quad)
+        print(print_convergence_table(results_quad))
 
     # Metadata for figures
     md_base = {
@@ -271,7 +270,7 @@ def main(mode='show', verbose=True):
         scheme="explicit",
     )
 
-    res = run_manufactured_case(params, funcs, A=1e-3, L=0.2, omega=omega, gamma=0.5, kappa=1e4, times_to_save=times_to_plot, store_energy=True)
+    res = run_manufactured_case_cached(params, funcs, A=1e-3, L=0.2, omega=omega, gamma=0.5, kappa=1e4, times_to_save=times_to_plot, store_energy=True, force_recompute=True)
 
     U_num = res['U_num']
     U_ref = res['U_ref']
@@ -300,7 +299,7 @@ def main(mode='show', verbose=True):
             print(f'  {fmt}: {path}')
 
     # Additional criteria: non-degeneracy at final time
-    k_param = results['cases'][Nmid]['solver'].param.k
+    k_param = beta / (rho0 * c**2)
     final_u_num = U_num[-1]
     min_denom = np.min(1.0 - 2.0 * k_param * final_u_num)
     max_point_error = np.max(np.abs(final_u_num - U_ref[-1]))

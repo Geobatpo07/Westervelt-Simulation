@@ -25,7 +25,7 @@ from typing import List, Dict, Any, Tuple, Callable, Optional
 import csv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DB_PATH = PROJECT_ROOT / Path("data/profiler_runs.sqlite")
+DEFAULT_DB_PATH = PROJECT_ROOT / "data" / "profiler_runs.sqlite"
 DEFAULT_TABLE_NAME = "profiler_runs"
 
 PROFILER_COLUMNS = [

@@ -18,9 +18,11 @@ from typing import Dict, Any, Tuple, Callable, List, Optional, Iterable
 from pathlib import Path
 from datetime import datetime
 
+from sympy.abc import alpha
+
 from core.numerics import _apply_boundary
 from core.solver import WesterveltSolver, WesterveltParams
-from core.profiler_db import insert_profiler_record
+from core.profiler_db import insert_profiler_record, DEFAULT_DB_PATH
 from utils import (
     compute_linf_time_error,
     compute_error_metrics,
@@ -31,7 +33,7 @@ from utils import (
     find_cached_solution,
     save_manufactured_solution_npz,
     load_manufactured_solution_npz,
-    build_manufactured_cache_name,
+    build_manufactured_cache_name, compute_gradient,
 )
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -81,7 +83,7 @@ def nx_from_level(N: int) -> int:
     Returns:
         int: Nombre de points correspondants.
     """
-    return 100 * 2 ** (N - 1) + 1
+    return int(100 * 2 ** (N - 1) + 1)
 
 
 def nx_from_mesh_size(dx: float, L: float) -> int:
@@ -101,7 +103,7 @@ def nx_from_mesh_size(dx: float, L: float) -> int:
 def save_solver_profile_to_sqlite(
         solver: WesterveltSolver,
         extra_metadata: Dict[str, Any],
-        profiler_db_path: str | Path | None = PROJECT_ROOT / "data/profiler_runs.sqlite",
+        profiler_db_path: str | Path | None = DEFAULT_DB_PATH
 ) -> None:
     if profiler_db_path is None:
         return
@@ -207,6 +209,7 @@ def make_manufactured_source(
         c: float,
         b: float,
         k: float,
+        bc_type: str = "dirichlet",
 ) -> Callable:
     """
     Crée une fonction source f(t, x) pour la solution fabriquée.
@@ -339,8 +342,8 @@ def run_manufactured_case_cached(
         store_energy: bool = False,
         cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
         force_recompute: bool = False,
-        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
-        profiler_db_path: str | Path | None = PROJECT_ROOT / "data/profiler_runs.sqlite",
+        profiler_path: str | Path | None = None,
+        profiler_db_path: str | Path | None = DEFAULT_DB_PATH,
 ):
     """
     Exécute une simulation avec solution fabriquée en utilisant un cache.
@@ -441,29 +444,12 @@ def run_manufactured_case_cached(
         store_energy=store_energy,
     )
 
-    if profiler_path is not None and case.get("solver") is not None:
+    if case.get("solver") is not None:
         case["solver"].save_profile_data(
             path=profiler_path,
+            db_path=profiler_db_path,
             extra_metadata={
                 "context": "run_case_cached",
-                "loaded_from_cache": False,
-                "cache_path": str(cache_path),
-                "nx": params.nx,
-                "nt": params.nt,
-                "T_final": params.nt * params.dt,
-                "L": L,
-                "scheme": params.scheme,
-                "bc": params.bc,
-                "A": A,
-                "A1": None,
-                "A2": None,
-            },
-        )
-        save_solver_profile_to_sqlite(
-            solver=case["solver"],
-            profiler_db_path=profiler_db_path,
-            extra_metadata={
-                "context": "run_manufactured_case_cached",
                 "validation_type": "manufactured",
                 "loaded_from_cache": False,
                 "cache_path": str(cache_path),
@@ -602,14 +588,17 @@ def convergence_study_manufactured(
         rho0: float = 1000.0,
         beta: float = 3.5,
         mu_v: float = 6e-6,
+        zeta: float = 0.0,
+        alpha: float = 1.0,
         A: float = 1e-3,
         gamma: float = 1.0,
         kappa: float = 1e4,
         scheme: str = "explicit",
-        base_nx: int = 50,
+        bc_type: str = "dirichlet",
         dt_mode: str = "cfl",
         dt_factor: float = 0.2,
         force_recompute: bool = False,
+        profiler_db_path: str | Path | None = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
     """
     Réalise une étude de convergence complète (MMS).
@@ -621,35 +610,55 @@ def convergence_study_manufactured(
         funcs: Fonctions de la solution fabriquée.
         levels: Liste des niveaux de raffinement N.
         L, T: Paramètres du domaine.
-        c, rho0, beta, mu_v: Paramètres physiques.
-        A, omega, gamma, kappa: Paramètres de la solution.
-        scheme: Schéma numérique.
-        base_nx: Nombre de points de base pour nx.
-        dt_mode: 'cfl' ou 'quadratic'.
-        dt_factor: Facteur de sécurité pour dt.
+        c, rho0, beta, mu_v, zeta: Paramètres physiques.
+        A, gamma, kappa: Paramètres de la solution fabriquée.
+        scheme: Schéma numérique ('explicit' ou 'semi_implicit').
+        bc_type: Type de conditions aux limites.
+        dt_mode: Stratégie de choix du pas de temps :
+            - 'cfl'            : Δt = dt_factor · Δx / c
+                                 (modes hors noyau, schéma explicite,
+                                  Prop. stabilité spectrale explicite)
+            - 'quadratic'      : Δt = dt_factor · C_max · Δx²
+                                 avec C_max = 1 / (2b)
+                                 (régime parabolique, schéma explicite)
+            - 'semi_cfl'       : Δt = dt_factor · Δt_max
+                                 avec Δt_max = (b + √(b² + α·c²·Δx²)) / c²
+                                 (racine positive de c²Δt² - 2bΔt = α·Δx²,
+                                  Prop. stabilité spectrale semi-implicite)
+            - 'semi_quadratic' : Δt = dt_factor · Δx² / (2b)
+                                 (régime parabolique, inconditionnellement
+                                  stable pour le schéma semi-implicite,
+                                  Remarque CFL semi-implicite)
+        dt_factor: Facteur de sécurité pour dt (doit être < 1).
 
     Returns:
         Dict[str, Any]: Résultats complets incluant erreurs, ordres et cas individuels.
+
+    Raises:
+        ValueError: Si dt_mode est inconnu.
+        AssertionError: Si la condition de stabilité correspondante n'est pas satisfaite.
     """
     omega = 2.0 * np.pi / T
-    errors_L2 = {}
-    errors_rel_L2 = {}
-    errors_H1 = {}
-    errors_grad = {}
-    errors_Linf = {}
-    mesh_sizes = {}
-    times_steps = {}
+    b = (zeta + (4 / 3) * mu_v) / rho0
+    k = beta / (rho0 * c**2)
 
-    cases = {}
+    errors_L2     = {}
+    errors_rel_L2 = {}
+    errors_H1     = {}
+    errors_grad   = {}
+    errors_Linf   = {}
+    mesh_sizes    = {}
+    times_steps   = {}
+    cases         = {}
 
     for N in levels:
-        nx = base_nx * 2 ** N + 1
+        nx = nx_from_level(N)
         dx = L / (nx - 1)
 
         if dt_mode == "cfl":
             dt = dt_factor * dx / c
         elif dt_mode == "quadratic":
-            dt = dt_factor * dx ** 2
+            dt = dt_factor * dx ** 2 / 5
         else:
             raise ValueError(f"Mode de temps inconnu : {dt_mode} | Choix : cfl, quadratic")
 
@@ -661,57 +670,58 @@ def convergence_study_manufactured(
             rho0=rho0,
             beta=beta,
             mu_v=mu_v,
+            zeta=zeta,
             dx=dx,
             dt=dt,
             nx=nx,
             nt=nt,
-            bc="dirichlet",
+            bc=bc_type,
             scheme=scheme,
         )
 
         times = np.arange(nt + 1) * dt
-        # times = [0, T / 8, 2 * T / 8, 3 * T / 8, 4 * T / 8, 5 * T / 8, 6 * T / 8, 7 * T / 8, T]
 
         case = run_manufactured_case_cached(
             params, funcs, A, L, omega, gamma, kappa,
             times_to_save=times,
             store_energy=False,
             force_recompute=force_recompute,
+            profiler_db_path=profiler_db_path,
         )
 
         errs = compute_manufactured_errors(
-            case["U_num"], case["U_ref"], dx, bc_type="dirichlet"
+            case["U_num"], case["U_ref"], dx, bc_type=bc_type
         )
 
-        errors_L2[N] = errs["Linf_L2"]
+        errors_L2[N]     = errs["Linf_L2"]
         errors_rel_L2[N] = errs["Linf_rel_L2"]
-        errors_H1[N] = errs["Linf_H1"]
-        errors_grad[N] = errs["Linf_grad"]
-        errors_Linf[N] = errs["Linf_Linf"]
-        mesh_sizes[N] = dx
-        times_steps[N] = dt
-        cases[N] = case
+        errors_H1[N]     = errs["Linf_H1"]
+        errors_grad[N]   = errs["Linf_grad"]
+        errors_Linf[N]   = errs["Linf_Linf"]
+        mesh_sizes[N]    = dx
+        times_steps[N]   = dt
+        cases[N]         = case
 
-    orders_L2 = compute_convergence_orders(errors_L2)
+    orders_L2     = compute_convergence_orders(errors_L2)
     orders_rel_L2 = compute_convergence_orders(errors_rel_L2)
-    orders_H1 = compute_convergence_orders(errors_H1)
-    orders_grad = compute_convergence_orders(errors_grad)
-    orders_Linf = compute_convergence_orders(errors_Linf)
+    orders_H1     = compute_convergence_orders(errors_H1)
+    orders_grad   = compute_convergence_orders(errors_grad)
+    orders_Linf   = compute_convergence_orders(errors_Linf)
 
     return {
-        "errors_L2": errors_L2,
+        "errors_L2":     errors_L2,
         "errors_rel_L2": errors_rel_L2,
-        "errors_H1": errors_H1,
-        "errors_grad": errors_grad,
-        "errors_Linf": errors_Linf,
-        "orders_L2": orders_L2,
+        "errors_H1":     errors_H1,
+        "errors_grad":   errors_grad,
+        "errors_Linf":   errors_Linf,
+        "orders_L2":     orders_L2,
         "orders_rel_L2": orders_rel_L2,
-        "orders_H1": orders_H1,
-        "orders_grad": orders_grad,
-        "orders_Linf": orders_Linf,
-        "mesh_sizes": mesh_sizes,
-        "time_steps": times_steps,
-        "cases": cases,
+        "orders_H1":     orders_H1,
+        "orders_grad":   orders_grad,
+        "orders_Linf":   orders_Linf,
+        "mesh_sizes":    mesh_sizes,
+        "time_steps":    times_steps,
+        "cases":         cases,
     }
 
 
@@ -889,11 +899,39 @@ def compute_relative_linf_l2_error(
 ) -> float:
     error = U_1 - U_2
 
-    err_l2_t = np.sqrt(np.sum(error ** 2, axis=1))
-    ref_l2_t = np.sqrt(np.sum(U_2 ** 2, axis=1))
+    err_l2_t = np.sqrt(dx * np.sum(error ** 2, axis=1))
+    ref_l2_t = np.sqrt(dx * np.sum(U_2 ** 2, axis=1))
 
     numerator = np.max(err_l2_t)
     denominator = np.max(ref_l2_t)
+
+    return float(numerator / (denominator + eps))
+
+
+def compute_relative_linf_h1_error(
+        U_1: np.ndarray,
+        U_2: np.ndarray,
+        dx: float,
+        bc_type: str = "dirichlet",
+        eps: float = 1e-14,
+) -> float:
+    error = U_1 - U_2
+
+    grad_e = compute_gradient(error, dx, bc_type=bc_type)
+    grad_ref = compute_gradient(U_2, dx, bc_type=bc_type)
+
+    if bc_type == "dirichlet":
+        error_inner = error[:, 1:-1]
+        ref_inner = U_2[:, 1:-1]
+    else:
+        error_inner = error
+        ref_inner = U_2
+
+    err_h1_t = np.sqrt(dx * (np.sum(error_inner ** 2, axis=1) + np.sum(grad_e ** 2, axis=1)))
+    ref_h1_t = np.sqrt(dx * (np.sum(ref_inner ** 2, axis=1) + np.sum(grad_ref ** 2, axis=1)))
+
+    numerator = np.max(err_h1_t)
+    denominator = np.max(ref_h1_t)
 
     return float(numerator / (denominator + eps))
 
@@ -926,6 +964,9 @@ def compute_refinement_error(
         "Linf_H1": compute_linf_time_error(
             U_coarse, U_fine_restricted, dx, norm_type="H1", bc_type=bc_type
         ),
+        "Linf_rel_H1": compute_relative_linf_h1_error(
+            U_coarse, U_fine_restricted, dx, bc_type=bc_type,
+        ),
         "Linf_grad": compute_linf_time_error(
             U_coarse, U_fine_restricted, dx, norm_type="grad", bc_type=bc_type
         ),
@@ -944,6 +985,7 @@ def _run_case_compute(
         rho0: float = 1000.0,
         beta: float = 3.5,
         mu_v: float = 6e-6,
+        zeta: float = 0.0,
         A1: float = 1.2e8,
         A2: float = 1.0e11,
         scheme: str = "semi_implicit",
@@ -972,6 +1014,7 @@ def _run_case_compute(
         rho0=rho0,
         beta=beta,
         mu_v=mu_v,
+        zeta=zeta,
         dx=dx,
         dt=dt,
         nx=nx,
@@ -1024,6 +1067,7 @@ def run_case_cached(
         rho0: float = 1000.0,
         beta: float = 3.5,
         mu_v: float = 6e-6,
+        zeta: float = 0.0,
         A1: float = 1.2e8,
         A2: float = 1.0e11,
         scheme: str = "semi_implicit",
@@ -1031,8 +1075,8 @@ def run_case_cached(
         store_energy: bool = False,
         cache_dir: str | Path = PROJECT_ROOT / "outputs/cache/solutions",
         force_recompute: bool = False,
-        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
-        profiler_db_path: str | Path | None = PROJECT_ROOT / "outputs/profiler_db.sqlite",
+        profiler_path: str | Path | None = None,
+        profiler_db_path: str | Path | None = DEFAULT_DB_PATH,
 ):
     import re
 
@@ -1103,6 +1147,7 @@ def run_case_cached(
         rho0=rho0,
         beta=beta,
         mu_v=mu_v,
+        zeta=zeta,
         A1=A1,
         A2=A2,
         scheme=scheme,
@@ -1110,27 +1155,10 @@ def run_case_cached(
         store_energy=store_energy,
     )
 
-    if profiler_path is not None and case.get("solver") is not None:
+    if case.get("solver") is not None:
         case["solver"].save_profile_data(
             path=profiler_path,
-            extra_metadata={
-                "context": "run_case_cached",
-                "loaded_from_cache": False,
-                "cache_path": str(cache_path),
-                "nx": nx,
-                "nt": nt,
-                "T_final": T_final,
-                "L": L,
-                "scheme": scheme,
-                "bc": bc,
-                "A": None,
-                "A1": A1,
-                "A2": A2,
-            },
-        )
-        save_solver_profile_to_sqlite(
-            solver=case["solver"],
-            profiler_db_path=profiler_db_path,
+            db_path=profiler_db_path,
             extra_metadata={
                 "context": "run_case_cached",
                 "validation_type": "refinement",
@@ -1233,11 +1261,17 @@ def convergence_study_refinement(
         levels: List[Tuple[int, int]],
         T_final: float = 37e-6,
         L_final: float = 0.2,
+        c: float = 1500.0,
+        rho0: float = 1000.0,
+        beta: float = 3.5,
+        mu_v: float = 6e-6,
+        zeta: float = 0.0,
         scheme: str = "explicit",
         bc: str = "dirichlet",
         store_energy: bool = False,
         force_recompute: bool = False,
-        profiler_path: str | Path | None = PROJECT_ROOT / "data/profiler_records.csv",
+        profiler_path: str | Path | None = None,
+        profiler_db_path: str | Path | None = DEFAULT_DB_PATH,
 ) -> Dict[str, Any]:
     """
     Réalise une étude de convergence par raffinement successif.
@@ -1262,11 +1296,17 @@ def convergence_study_refinement(
             nt=nt,
             T_final=T_final,
             L=L_final,
+            c=c,
+            rho0=rho0,
+            beta=beta,
+            mu_v=mu_v,
+            zeta=zeta,
             scheme=scheme,
             bc=bc,
             store_energy=store_energy,
             force_recompute=force_recompute,
             profiler_path=profiler_path,
+            profiler_db_path=profiler_db_path,
         )
         cases[(nx, nt)] = case
 
@@ -1451,4 +1491,62 @@ def scan_critical_amplitudes(
     return pd.DataFrame(rows)
 
 
+def compare_schemes_vs_b_final_time(
+        mu_v_values,
+        nx=801,
+        nt=800,
+        T_final=37e-6,
+        L_final=0.2,
+        bc="dirichlet",
+        force_recompute=False,
+):
+    rows = []
 
+    for mu_v in mu_v_values:
+        case_exp = run_case_cached(
+            nx=nx,
+            nt=nt,
+            T_final=T_final,
+            L=L_final,
+            scheme="explicit",
+            bc=bc,
+            mu_v=mu_v,
+            force_recompute=force_recompute,
+        )
+
+        case_semi = run_case_cached(
+            nx=nx,
+            nt=nt,
+            T_final=T_final,
+            L=L_final,
+            scheme="semi_implicit",
+            bc=bc,
+            mu_v=mu_v,
+            force_recompute=force_recompute,
+        )
+
+        x = case_exp['x']
+        dx = case_exp['dx']
+
+        U_exp_T = case_exp['U'][-1]
+        U_semi_T = case_semi['U'][-1]
+
+        diff_T = U_exp_T - U_semi_T
+
+        linf_abs = np.max(np.abs(diff_T))
+        l2_abs = np.sqrt(dx * np.sum(diff_T ** 2))
+        l2_ref = np.sqrt(dx * np.sum(U_semi_T ** 2))
+        l2_rel = l2_abs / l2_ref if l2_ref > 1e-15 else np.nan
+
+        rows.append({
+            "b": mu_v / 1000.0,
+            "nx": nx,
+            "nt": nt,
+            "dx": dx,
+            "dt": case_exp["dt"],
+            "linf_abs_final": linf_abs,
+            "l2_abs_final": l2_abs,
+            "l2_rel_final": l2_rel,
+        })
+
+    return pd.DataFrame(rows)

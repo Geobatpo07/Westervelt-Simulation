@@ -353,6 +353,9 @@ def append_profiler_record_csv(
     path = Path(path) if path is not None else Path(PROJECT_ROOT / "data/profiler_records.csv")
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Note: Enregistrement CSV marqué comme secondaire. 
+    # La base SQLite data/profiler_runs.sqlite est la source de vérité.
+
     record = {
         "timestamp": datetime.now().isoformat(),
         **record,
@@ -411,10 +414,16 @@ def save_figure_with_version(
     # Obtenir le numéro de version
     temp_file = output_path / f"{filename}.tmp"
     version = get_next_version(temp_file)
-    
-    # Appliquer tight_layout si demandé
+
+    # Appliquer tight_layout seulement si possible
     if tight_layout:
-        fig.tight_layout()
+        try:
+            fig.tight_layout()
+        except RuntimeError as e:
+            if "Colorbar layout" in str(e):
+                print(f"tight_layout ignoré pour {filename} : figure avec colorbar/constrained_layout.")
+            else:
+                raise
     
     # Enregistrer dans les différents formats
     saved_paths = {}
